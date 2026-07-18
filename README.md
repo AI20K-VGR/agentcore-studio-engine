@@ -2,10 +2,10 @@
 
 > Interpreter + 6 node executors + fence-EXECUTOR. Stateless (không schema DB).
 
-**Owner:** AIE-1 · **Loại:** uv workspace member (Python 3.14) · **Repo cha:** [agentcore-studio-kit](https://github.com/hieubui2409/agentcore-studio-kit)
+**Owner:** AIE-1 — Trần Bá Đạt · **Loại:** uv workspace member (Python 3.14) · **Repo cha:** [agentcore-studio-kit](https://github.com/hieubui2409/agentcore-studio-kit)
 
 ## Repo này là gì
-Submodule `packages/engine` của workspace `agentcore-studio-kit`. Owner: **AIE-1**. Chứa interpreter + node executors + closed-set node type. Stateless — không giữ schema DB.
+Submodule `packages/engine` của workspace `agentcore-studio-kit`. Owner: **AIE-1 — Trần Bá Đạt**. Chứa interpreter + node executors + closed-set node type. Stateless — không giữ schema DB.
 
 ## ⚠️ Không build/test độc lập được
 `agentcore-studio-engine` phụ thuộc `agentcore-studio-contracts` + uv.lock của repo cha. Stateless nên **không cần DB**, nhưng vẫn cần workspace để resolve dependency. Vì vậy:
