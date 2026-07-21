@@ -1,0 +1,11 @@
+{
+  "case_id": "smoke-01",
+  "node_id": "n2",
+  "request": {
+    "prompt": "Bạn là trợ lý nội bộ của tenant ankor. Dựa trên đoạn trích dưới đây, trả lời câu hỏi và trích dẫn đúng chunk_id trong ngoặc vuông.\n\n[chunk-001] Nhân viên tenant ankor được nghỉ phép năm 12 ngày, có thể gộp tối đa 5 ngày sang năm sau.\n\nCâu hỏi: Nhân viên ankor được nghỉ phép năm bao nhiêu ngày?",
+    "kwargs": {
+      "temperature": 0
+    }
+  },
+  "response": "Nhân viên tenant ankor được nghỉ phép năm 12 ngày, có thể gộp tối đa 5 ngày sang năm sau. [chunk-001]"
+}
