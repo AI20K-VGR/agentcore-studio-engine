@@ -7,6 +7,9 @@ dependencies = [
     "agentcore-studio-contracts",
 ]
 
+[project.scripts]
+studio-engine-demo = "studio_engine.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
