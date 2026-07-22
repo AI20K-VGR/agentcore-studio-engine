@@ -41,8 +41,8 @@ class _NoOpTraceWriter:
 
 def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
     """4-node `kb-retrieve -> llm-step -> tool-call -> end` recipe (shape
-    mirrors `test_interpreter_contract.py::_minimal_recipe`, extended to a
-    real 4-node `dag.nodes` list). `tool_whitelist` includes `_TOOL_NAME`,
+    mirrors the Day-2 minimal-recipe pattern, extended to a real 4-node
+    `dag.nodes` list). `tool_whitelist` includes `_TOOL_NAME`,
     the same name the `tool-call` node's `params={"tool": ...}` carries —
     must match what `run()` constructs `WhitelistToolDispatch` with,
     otherwise the dispatcher legitimately raises."""

@@ -118,10 +118,9 @@ class ToolDispatch(Protocol):
     """Engine-local seam for the `tool-call` node's dispatcher collaborator
     (NOT a `studio_contracts` protocol — `packages/contracts` has no
     tool-dispatch seam; this is `studio_engine`'s own, same as `NodeExecutor`
-    above). `ToolCallExecutor`'s constructor is not frozen by
-    `test_interpreter_contract.py`, so this DI param was free to add here
-    (unlike `KbRetrieveExecutor`/`LlmStepExecutor`, whose constructors are
-    locked)."""
+    above). `ToolCallExecutor`'s constructor is not frozen by any contract
+    test, so this DI param was free to add here (unlike
+    `KbRetrieveExecutor`/`LlmStepExecutor`, whose constructors are locked)."""
 
     async def dispatch(self, tool: str) -> object: ...
 

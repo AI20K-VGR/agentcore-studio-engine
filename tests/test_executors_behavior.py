@@ -71,6 +71,18 @@ async def test_tool_call_dispatches_whitelisted() -> None:
         await ToolCallExecutor(WhitelistToolDispatch(["search_docs"])).execute(bad_node)
 
 
+async def test_tool_call_no_dispatcher_still_not_implemented() -> None:
+    """`ToolCallExecutor()` (0-arg, `dispatcher=None` default) must still raise
+    `NotImplementedError` — the pre-phase-1 call shape (locked previously by
+    `test_interpreter_contract.py::test_each_executor_not_implemented`, which
+    was removed in phase 2). Guards `executors.py`'s `if self._dispatcher is
+    None: raise NotImplementedError(...)` branch against silently regressing
+    to e.g. `return {}` — that branch is otherwise unreachable/untested."""
+    node = Node(id="n3c", type=NodeType.TOOL_CALL, params={"tool": "search_docs"})
+    with pytest.raises(NotImplementedError):
+        await ToolCallExecutor().execute(node)
+
+
 async def test_end_terminates() -> None:
     node = Node(id="n4", type=NodeType.END, params={})
     result = await EndExecutor().execute(node)
