@@ -16,8 +16,12 @@ from studio_contracts import LLM, EmbeddingService, KbSearch, KbSearchResultItem
 
 # Stub-grade citation extraction (spec AIE-1, phase-1 risk table) — a simple
 # `[chunk_id]` bracket regex, NOT a real citation parser. Good enough for the
-# Day 3 fixture-replay demo; YAGNI on anything smarter here.
-_CITATION_RE = re.compile(r"\[([\w-]+)\]")
+# Day 3 fixture-replay demo; YAGNI on anything smarter here. Character class
+# includes `#` for DE's real chunk_id shape `{doc_id}#c{n}`
+# (packages/kb/docs/callisto-doc-schema.md:209) — a class without it silently
+# drops every real chunk_id match, only ever working by accident on the
+# synthetic hyphen-only `chunk-NNN` ids used in this repo's own fixtures.
+_CITATION_RE = re.compile(r"\[([\w#-]+)\]")
 
 
 @runtime_checkable
@@ -100,18 +104,22 @@ class LlmStepExecutor:
         `embedding` is wired via constructor-DI but unused here — Day 3's
         recipe never calls for an embed step (Day 7 is the real usage).
 
-        Citations (Day 4 threading, spec AIE-1): `node.params["retrieved_chunks"]`
+        Citations (Day 4 threading, spec AIE-1, grounded): `node.params["retrieved_chunks"]`
         carries the `KbSearchResultItem` list `interpreter.run()` threaded in
         from the upstream `kb-retrieve` node's real output (see
-        `interpreter.py::run`). When non-empty, citations are the real
-        `chunk_id`s `kb-retrieve` actually returned — NOT the stub-grade
-        `\\[chunk_id\\]` bracket regex (`_CITATION_RE`) over the answer text,
-        which would just replay whatever id happens to be baked into a fixture
-        LLM string. When `retrieved_chunks` is empty (or absent, e.g. no
-        upstream `kb-retrieve` in this walk), `[]` is a valid result (contract
-        §6.1, `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and
-        behavior falls back to the prior regex-extraction (unchanged, keeps
-        Day 3's `test_llm_step_replays_fixture_answer` green)."""
+        `interpreter.py::run`). When non-empty, a citation must be BOTH
+        retrieved AND actually bracket-cited in the answer text: extract
+        `\\[chunk_id\\]` mentions (`_CITATION_RE`, in answer order) and keep
+        only the ones present in `retrieved_chunks`. Citing "everything
+        retrieved" regardless of what the answer references is a real bug
+        (found against DE's `StaticKbSearch`, which returns `top_k` chunks
+        per query, not 1) — it would cite chunks the LLM never used. When
+        `retrieved_chunks` is empty (or absent, e.g. no upstream
+        `kb-retrieve` in this walk), `[]` is a valid result (contract §6.1,
+        `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and there is
+        nothing to filter against, so citations fall back to the raw
+        extraction (unchanged, keeps Day 3's
+        `test_llm_step_replays_fixture_answer` green)."""
         raw_prompt = node.params.get("prompt", "")
         raw_kwargs = node.params.get("kwargs", {})
         raw_chunks = node.params.get("retrieved_chunks", [])
@@ -121,7 +129,12 @@ class LlmStepExecutor:
         retrieved_chunks: list[KbSearchResultItem] = raw_chunks if isinstance(raw_chunks, list) else []
 
         answer = await self._llm.complete(prompt, **kwargs)
-        citations = [chunk.chunk_id for chunk in retrieved_chunks] if retrieved_chunks else _CITATION_RE.findall(answer)
+        extracted = _CITATION_RE.findall(answer)
+        if retrieved_chunks:
+            retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
+            citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
+        else:
+            citations = extracted
         return {"answer": answer, "tokens": Tokens(prompt=0, completion=0), "citations": citations}
 
 

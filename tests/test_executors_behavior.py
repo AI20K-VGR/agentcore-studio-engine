@@ -28,6 +28,18 @@ from studio_engine.executors import (
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "llm_step" / "smoke-01.json"
 
 
+class _HashChunkIdLLM:
+    """Test-local `LLM` double replaying a fixed answer that cites a
+    real-shaped DE chunk_id (`{doc_id}#c{n}`, `packages/kb/docs/
+    callisto-doc-schema.md:209`) — `FixtureLLM`'s `smoke-01.json` only ever
+    used a synthetic hyphen-only id (`chunk-001`), which never exercised the
+    `#` character in `_CITATION_RE`."""
+
+    async def complete(self, prompt: str, **kwargs: object) -> str:
+        del prompt, kwargs
+        return "Nhân viên báo trước 3 ngày làm việc. [ankor-leave-001#c1]"
+
+
 async def test_kb_retrieve_returns_empty_stub() -> None:
     """`EmptyKbSearch` stub always returns `[]` — executor must pass it
     through unchanged (fence-EXECUTOR: never widen/re-derive on this side)."""
@@ -56,6 +68,18 @@ async def test_llm_step_replays_fixture_answer() -> None:
     assert result["answer"] == fixture["response"]
     assert result["tokens"] == Tokens(prompt=0, completion=0)
     assert result["citations"] == ["chunk-001"]
+
+
+async def test_llm_step_citation_regex_handles_real_de_chunk_id_format() -> None:
+    """`_CITATION_RE` must extract a real DE-shaped chunk_id (`{doc_id}#c{n}`,
+    e.g. `ankor-leave-001#c1`) out of `[...]` brackets, not just the
+    synthetic hyphen-only `chunk-NNN` ids every other fixture in this repo
+    happens to use. A character class that excludes `#` silently drops the
+    match entirely (`[]`, not an error) — this must FAIL on that bug."""
+    node = Node(id="n2b", type=NodeType.LLM_STEP, params={"prompt": "x", "kwargs": {}})
+    result = await LlmStepExecutor(_HashChunkIdLLM(), EmptyEmbedding()).execute(node)
+    assert isinstance(result, dict)
+    assert result["citations"] == ["ankor-leave-001#c1"]
 
 
 async def test_tool_call_dispatches_whitelisted() -> None:
