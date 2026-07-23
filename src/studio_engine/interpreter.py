@@ -92,6 +92,9 @@ async def run(
     state: dict[str, object] = {}
     for node_type in _WALK_ORDER:
         node = nodes_by_type[node_type]
+        if node_type is NodeType.LLM_STEP:
+            kb_node_id = nodes_by_type[NodeType.KB_RETRIEVE].id
+            node = node.model_copy(update={"params": {**node.params, "retrieved_chunks": state[kb_node_id]}})
         state[node.id] = await executors[node_type].execute(node)
         if node_type is NodeType.END:
             break

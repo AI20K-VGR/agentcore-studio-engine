@@ -12,12 +12,16 @@ from __future__ import annotations
 import re
 from typing import Protocol, runtime_checkable
 
-from studio_contracts import LLM, EmbeddingService, KbSearch, Node, Tokens
+from studio_contracts import LLM, EmbeddingService, KbSearch, KbSearchResultItem, Node, Tokens
 
 # Stub-grade citation extraction (spec AIE-1, phase-1 risk table) — a simple
 # `[chunk_id]` bracket regex, NOT a real citation parser. Good enough for the
-# Day 3 fixture-replay demo; YAGNI on anything smarter here.
-_CITATION_RE = re.compile(r"\[([\w-]+)\]")
+# Day 3 fixture-replay demo; YAGNI on anything smarter here. Character class
+# includes `#` for DE's real chunk_id shape `{doc_id}#c{n}`
+# (packages/kb/docs/callisto-doc-schema.md:209) — a class without it silently
+# drops every real chunk_id match, only ever working by accident on the
+# synthetic hyphen-only `chunk-NNN` ids used in this repo's own fixtures.
+_CITATION_RE = re.compile(r"\[([\w#-]+)\]")
 
 
 @runtime_checkable
@@ -45,6 +49,16 @@ class KbRetrieveExecutor:
       this executor's only fence duty is to never undermine that guarantee
       by widening or re-deriving `section_roles` on the client/executor side.
     - The result's cited `chunk_id`s flow into the emitted `TraceEvent.citations`.
+
+    Trạng thái 2026-07-23 (DE-blocked): `KbSearch.search(...)` ở trên vẫn được
+    gọi qua interface — nhưng impl thật (`packages/kb/src/studio_kb/search.py
+    ::KbSearchService.search`) vẫn `raise NotImplementedError` (DE chưa xong,
+    pin bằng `packages/kb/tests/test_search_contract.py`). `.importlinter`
+    cấm `studio_engine` import `studio_kb` trực tiếp, nên điểm nối `KbSearch`
+    thật chỉ có thể xảy ra ở `apps/studio` (composition root, Day 6) — KHÔNG
+    ở đây. Điểm flip khi DE xong:
+    `tests/e2e/test_lifecycle.py::test_step_2_attach_tools_and_kb_scope` và
+    `tests/e2e/test_lifecycle.py::test_step_5_fence_proof_zero_leak_money_shot`.
     """
 
     def __init__(self, kb_search: KbSearch) -> None:
@@ -84,22 +98,43 @@ class LlmStepExecutor:
 
     async def execute(self, node: Node) -> object:
         """Output shape (v0 stub): `{"answer": <LLM.complete str>, "tokens":
-        Tokens(0, 0), "citations": [<chunk_id extracted from the answer
-        text>]}`. Citation extraction is a stub-grade `\\[chunk_id\\]` bracket
-        regex (`_CITATION_RE`) — good enough for the Day 3 fixture-replay
-        demo, not a real citation parser (YAGNI). `tokens` is hardcoded to
+        Tokens(0, 0), "citations": [...]}`. `tokens` is hardcoded to
         `Tokens(0, 0)`: Day 3's `LLM` collaborator is a fixture replay with no
         real token accounting; real usage lands with the gateway-stub client.
         `embedding` is wired via constructor-DI but unused here — Day 3's
-        recipe never calls for an embed step (Day 7 is the real usage)."""
+        recipe never calls for an embed step (Day 7 is the real usage).
+
+        Citations (Day 4 threading, spec AIE-1, grounded): `node.params["retrieved_chunks"]`
+        carries the `KbSearchResultItem` list `interpreter.run()` threaded in
+        from the upstream `kb-retrieve` node's real output (see
+        `interpreter.py::run`). When non-empty, a citation must be BOTH
+        retrieved AND actually bracket-cited in the answer text: extract
+        `\\[chunk_id\\]` mentions (`_CITATION_RE`, in answer order) and keep
+        only the ones present in `retrieved_chunks`. Citing "everything
+        retrieved" regardless of what the answer references is a real bug
+        (found against DE's `StaticKbSearch`, which returns `top_k` chunks
+        per query, not 1) — it would cite chunks the LLM never used. When
+        `retrieved_chunks` is empty (or absent, e.g. no upstream
+        `kb-retrieve` in this walk), `[]` is a valid result (contract §6.1,
+        `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and there is
+        nothing to filter against, so citations fall back to the raw
+        extraction (unchanged, keeps Day 3's
+        `test_llm_step_replays_fixture_answer` green)."""
         raw_prompt = node.params.get("prompt", "")
         raw_kwargs = node.params.get("kwargs", {})
+        raw_chunks = node.params.get("retrieved_chunks", [])
 
         prompt = raw_prompt if isinstance(raw_prompt, str) else str(raw_prompt)
         kwargs: dict[str, object] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
+        retrieved_chunks: list[KbSearchResultItem] = raw_chunks if isinstance(raw_chunks, list) else []
 
         answer = await self._llm.complete(prompt, **kwargs)
-        citations = _CITATION_RE.findall(answer)
+        extracted = _CITATION_RE.findall(answer)
+        if retrieved_chunks:
+            retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
+            citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
+        else:
+            citations = extracted
         return {"answer": answer, "tokens": Tokens(prompt=0, completion=0), "citations": citations}
 
 
