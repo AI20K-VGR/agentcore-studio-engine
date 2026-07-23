@@ -93,6 +93,7 @@ async def test_run_final_state_has_each_node_output() -> None:
     llm_output = final_state["n_llm"]
     assert isinstance(llm_output, dict)
     assert llm_output["answer"] == fixture["response"]
+    assert llm_output["refused"] is True
     assert final_state["n_tool"] == {"tool": _TOOL_NAME, "status": "stub-dispatched"}
     assert final_state["n_end"] == {"terminated": True}
 

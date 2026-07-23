@@ -162,6 +162,7 @@ async def test_llm_step_cites_chunk_that_is_both_retrieved_and_referenced() -> N
     llm_output = result.final_state["n_llm"]
     assert isinstance(llm_output, dict)
     assert llm_output["citations"] == [_REAL_CHUNK_ID]
+    assert llm_output["refused"] is False
 
 
 async def test_llm_step_does_not_cite_a_retrieved_chunk_the_answer_never_mentions() -> None:
