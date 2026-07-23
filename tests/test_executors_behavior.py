@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 import pytest
-from studio_contracts import Node, NodeType, Tokens
+from studio_contracts import KbSearchResultItem, Node, NodeType, Tokens
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM, WhitelistToolDispatch
 from studio_engine.executors import (
     ConditionExecutor,
@@ -68,6 +68,48 @@ async def test_llm_step_replays_fixture_answer() -> None:
     assert result["answer"] == fixture["response"]
     assert result["tokens"] == Tokens(prompt=0, completion=0)
     assert result["citations"] == ["chunk-001"]
+    assert result["refused"] is True
+
+
+async def test_llm_step_refused_true_when_no_chunks_retrieved() -> None:
+    """`refused` is a STRUCTURAL signal derived from `retrieved_chunks`, not
+    a guess on the answer's free text (`studio_evalhub.agent_runner.
+    AgentAnswer.refused`'s docstring forbids inferring refusal from prose).
+    No `retrieved_chunks` param at all (absent, same as `EmptyKbSearch`'s `[]`)
+    → nothing to ground an answer in → `refused` must be `True`, regardless of
+    what the LLM's answer text says. Feeds `studio_evalhub`'s smoke-eval
+    fail-closed refusal branch (SC-04/SC-05, `packages/kb/golden/smoke-5.yaml`)."""
+    node = Node(id="n2c", type=NodeType.LLM_STEP, params={"prompt": "x", "kwargs": {}})
+    result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
+    assert isinstance(result, dict)
+    assert result["refused"] is True
+
+
+async def test_llm_step_refused_false_when_chunks_retrieved() -> None:
+    """A non-empty `retrieved_chunks` (real grounding available) → `refused`
+    must be `False`, even though this stub still can't distinguish "answered"
+    from "answered badly" — that is the answerable branch's own concern
+    (`score_case`'s `contains` match / citation_accuracy), not this field's."""
+    node = Node(
+        id="n2d",
+        type=NodeType.LLM_STEP,
+        params={
+            "prompt": "x",
+            "kwargs": {},
+            "retrieved_chunks": [
+                KbSearchResultItem(
+                    chunk_id="ankor-leave-001#c1",
+                    text="Báo trước tối thiểu 3 ngày làm việc.",
+                    score=0.9,
+                    tenant="ankor",
+                    section_role="public",
+                )
+            ],
+        },
+    )
+    result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
+    assert isinstance(result, dict)
+    assert result["refused"] is False
 
 
 async def test_llm_step_citation_regex_handles_real_de_chunk_id_format() -> None:

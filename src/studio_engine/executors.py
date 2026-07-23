@@ -98,11 +98,12 @@ class LlmStepExecutor:
 
     async def execute(self, node: Node) -> object:
         """Output shape (v0 stub): `{"answer": <LLM.complete str>, "tokens":
-        Tokens(0, 0), "citations": [...]}`. `tokens` is hardcoded to
-        `Tokens(0, 0)`: Day 3's `LLM` collaborator is a fixture replay with no
-        real token accounting; real usage lands with the gateway-stub client.
-        `embedding` is wired via constructor-DI but unused here — Day 3's
-        recipe never calls for an embed step (Day 7 is the real usage).
+        Tokens(0, 0), "citations": [...], "refused": <bool>}`. `tokens` is
+        hardcoded to `Tokens(0, 0)`: Day 3's `LLM` collaborator is a fixture
+        replay with no real token accounting; real usage lands with the
+        gateway-stub client. `embedding` is wired via constructor-DI but
+        unused here — Day 3's recipe never calls for an embed step (Day 7 is
+        the real usage).
 
         Citations (Day 4 threading, spec AIE-1, grounded): `node.params["retrieved_chunks"]`
         carries the `KbSearchResultItem` list `interpreter.run()` threaded in
@@ -119,7 +120,24 @@ class LlmStepExecutor:
         `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and there is
         nothing to filter against, so citations fall back to the raw
         extraction (unchanged, keeps Day 3's
-        `test_llm_step_replays_fixture_answer` green)."""
+        `test_llm_step_replays_fixture_answer` green).
+
+        `refused` (added D4 follow-up, for `studio_evalhub`'s smoke-eval
+        fail-closed refusal branch — SC-04 cross-tenant / SC-05 cross-role in
+        `packages/kb/golden/smoke-5.yaml`): `True` iff `retrieved_chunks` is
+        empty. This is a STRUCTURAL signal, not a guess on the answer's free
+        text (`studio_evalhub.agent_runner.AgentAnswer.refused`'s docstring
+        explicitly forbids inferring refusal from prose). It is sound because
+        the permission fence lives at retrieval (umbrella-contract §1: "KHÔNG
+        được nhờ LLM 'đừng nói'") — a fenced/no-data query surfaces here as
+        `kb-retrieve` returning `[]`, and the hardcoded 4-node walk (R2) always
+        runs `kb-retrieve` before `llm-step`, so every case in this engine's
+        current scope is KB-grounded and "nothing retrieved" ⟺ "must refuse,
+        not hallucinate" (umbrella-contract §1). Known gap this does NOT
+        cover (tracked, not this field's job): an LLM that hallucinates an
+        answer despite empty `retrieved_chunks` is still marked `refused` here
+        — catching that is the separate "nhánh trả-lời-được không kiểm rò rỉ"
+        gap noted in `packages/kb/docs/format.md` §9b."""
         raw_prompt = node.params.get("prompt", "")
         raw_kwargs = node.params.get("kwargs", {})
         raw_chunks = node.params.get("retrieved_chunks", [])
@@ -135,7 +153,12 @@ class LlmStepExecutor:
             citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
         else:
             citations = extracted
-        return {"answer": answer, "tokens": Tokens(prompt=0, completion=0), "citations": citations}
+        return {
+            "answer": answer,
+            "tokens": Tokens(prompt=0, completion=0),
+            "citations": citations,
+            "refused": not retrieved_chunks,
+        }
 
 
 class ConditionExecutor:
