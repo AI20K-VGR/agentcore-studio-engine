@@ -78,7 +78,24 @@ async def test_llm_step_replays_fixture_answer() -> None:
     node = Node(
         id="n2",
         type=NodeType.LLM_STEP,
-        params={"prompt": fixture["request"]["prompt"], "kwargs": fixture["request"]["kwargs"]},
+        params={
+            "prompt": fixture["request"]["prompt"],
+            "kwargs": fixture["request"]["kwargs"],
+            # `chunk-001` is BOTH retrieved (here) AND bracket-cited by the
+            # fixture answer, so the grounded-citation rule keeps it. Grounding
+            # is now REQUIRED: with empty `retrieved_chunks` there is nothing to
+            # cite against and `citations` would be `[]` (see
+            # `test_llm_step_empty_retrieved_chunks_yields_no_ungrounded_citation`).
+            "retrieved_chunks": [
+                KbSearchResultItem(
+                    chunk_id="chunk-001",
+                    text="Nhân viên tenant ankor được nghỉ phép năm 12 ngày.",
+                    score=0.9,
+                    tenant_id=ANKOR_ID,
+                    section_role="public",
+                )
+            ],
+        },
     )
     result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
     assert isinstance(result, dict)
@@ -166,10 +183,44 @@ async def test_llm_step_citation_regex_handles_real_de_chunk_id_format() -> None
     synthetic hyphen-only `chunk-NNN` ids every other fixture in this repo
     happens to use. A character class that excludes `#` silently drops the
     match entirely (`[]`, not an error) — this must FAIL on that bug."""
-    node = Node(id="n2b", type=NodeType.LLM_STEP, params={"prompt": "x", "kwargs": {}})
+    # The chunk is grounded (present in `retrieved_chunks`) so the
+    # grounded-citation rule keeps it — this isolates the regex behavior from
+    # the grounding filter (empty chunks would yield `[]` regardless).
+    node = Node(
+        id="n2b",
+        type=NodeType.LLM_STEP,
+        params={
+            "prompt": "x",
+            "kwargs": {},
+            "retrieved_chunks": [
+                KbSearchResultItem(
+                    chunk_id="ankor-leave-001#c1",
+                    text="Nhân viên báo trước 3 ngày làm việc.",
+                    score=0.9,
+                    tenant_id=ANKOR_ID,
+                    section_role="public",
+                )
+            ],
+        },
+    )
     result = await LlmStepExecutor(_HashChunkIdLLM(), EmptyEmbedding()).execute(node)
     assert isinstance(result, dict)
     assert result["citations"] == ["ankor-leave-001#c1"]
+
+
+async def test_llm_step_empty_retrieved_chunks_yields_no_ungrounded_citation() -> None:
+    """When `retrieved_chunks` is empty (e.g. `kb-retrieve` returned nothing,
+    or the tenant fence blocked retrieval), there is NOTHING to ground a
+    citation against — any `[chunk_id]` the LLM brackets is ungrounded and MUST
+    be dropped. `citations` must be `[]`, never the raw extraction. Guards the
+    false-positive citation-accuracy the smoke-eval hit when an ungrounded
+    marker leaked into the trace as a "real" citation. The LLM here brackets
+    `[ankor-leave-001#c1]` but no chunk was retrieved, so nothing may be
+    cited."""
+    node = Node(id="n2e", type=NodeType.LLM_STEP, params={"prompt": "x", "kwargs": {}})
+    result = await LlmStepExecutor(_HashChunkIdLLM(), EmptyEmbedding()).execute(node)
+    assert isinstance(result, dict)
+    assert result["citations"] == []
 
 
 async def test_tool_call_dispatches_whitelisted() -> None:

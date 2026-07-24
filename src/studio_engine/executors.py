@@ -132,11 +132,14 @@ class LlmStepExecutor:
         (found against DE's `StaticKbSearch`, which returns `top_k` chunks
         per query, not 1) — it would cite chunks the LLM never used. When
         `retrieved_chunks` is empty (or absent, e.g. no upstream
-        `kb-retrieve` in this walk), `[]` is a valid result (contract §6.1,
-        `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and there is
-        nothing to filter against, so citations fall back to the raw
-        extraction (unchanged, keeps Day 3's
-        `test_llm_step_replays_fixture_answer` green).
+        `kb-retrieve` in this walk, or retrieval was fenced/blocked), `[]` is a
+        valid result (contract §6.1, `packages/kb/docs/contracts/kb-search.v0.md:172-175`)
+        and there is nothing to ground a citation against, so `citations` is
+        `[]` — NOT the raw extraction. An earlier cut fell back to the raw
+        `[chunk_id]` extraction here, which let an ungrounded (hallucinated)
+        marker leak into the trace as a "real" citation and made the smoke-eval
+        score a false-positive citation-accuracy. Grounding is required: no
+        retrieved chunk → no citation.
 
         `refused` (D4 fix, for `studio_evalhub`'s smoke-eval fail-closed refusal
         branch — SC-04 cross-tenant / SC-05 cross-role in
@@ -169,13 +172,18 @@ class LlmStepExecutor:
             # cite, and forcing `[]` keeps the sentinel's own bracket text from
             # ever parsing as a spurious citation.
             citations: list[str] = []
-        else:
+        elif retrieved_chunks:
             extracted = _CITATION_RE.findall(answer)
-            if retrieved_chunks:
-                retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
-                citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
-            else:
-                citations = extracted
+            retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
+            citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
+        else:
+            # No chunk was retrieved (empty/blocked retrieval) → there is
+            # NOTHING to ground a citation against, so nothing may be cited. Any
+            # `[chunk_id]` the LLM brackets here is ungrounded/hallucinated; the
+            # earlier "fall back to raw extraction" behavior let that leak into
+            # the trace as a "real" citation and made the smoke-eval score a
+            # false-positive citation-accuracy. Fail closed with `[]`.
+            citations = []
         return {
             "answer": answer,
             "tokens": Tokens(prompt=0, completion=0),
