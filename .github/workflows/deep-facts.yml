@@ -27,8 +27,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Measure coverage + lint (tolerant, metric-only — never gates)
-        id: measure
+      - name: Measure coverage + lint, then write result (tolerant, metric-only — never gates)
         run: |
           set +e
           COV=0; LINT=0; STACK=none
@@ -48,24 +47,28 @@ jobs:
             LINT=$(python3 -c "import json;print(sum(f.get('errorCount',0)+f.get('warningCount',0) for f in json.load(open('/tmp/lint.json'))))" 2>/dev/null || echo 0)
             COV=0
           fi
+          [ -z "$COV" ] && COV=0
+          [ -z "$LINT" ] && LINT=0
           echo "detected stack=$STACK coverage_pct=$COV lint_violation_count=$LINT"
-          echo "cov=$COV"   >> "$GITHUB_OUTPUT"
-          echo "lint=$LINT" >> "$GITHUB_OUTPUT"
-          echo "stack=$STACK" >> "$GITHUB_OUTPUT"
-
-      - name: Write deep-facts result (generic metric_id: coverage_pct / lint_violation_count, F-26)
-        run: |
-          cat > deep-facts-result.json <<EOF
-          [
-            {"metric_id":"coverage_pct","value":${{ steps.measure.outputs.cov }},"unit":"percent","stack":"${{ steps.measure.outputs.stack }}"},
-            {"metric_id":"lint_violation_count","value":${{ steps.measure.outputs.lint }},"unit":"count","stack":"${{ steps.measure.outputs.stack }}"}
-          ]
-          EOF
-          echo "### deep-facts" >> "$GITHUB_STEP_SUMMARY"
-          echo "- stack: \`${{ steps.measure.outputs.stack }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- coverage_pct: **${{ steps.measure.outputs.cov }}**" >> "$GITHUB_STEP_SUMMARY"
-          echo "- lint_violation_count: **${{ steps.measure.outputs.lint }}**" >> "$GITHUB_STEP_SUMMARY"
+          python3 - "$STACK" "$COV" "$LINT" > deep-facts-result.json <<'PY'
+          import json, sys
+          stack, cov, lint = sys.argv[1], sys.argv[2], sys.argv[3]
+          try: cov_v = float(cov)
+          except ValueError: cov_v = 0
+          try: lint_v = int(float(lint))
+          except ValueError: lint_v = 0
+          print(json.dumps([
+              {"metric_id": "coverage_pct", "value": cov_v, "unit": "percent", "stack": stack},
+              {"metric_id": "lint_violation_count", "value": lint_v, "unit": "count", "stack": stack},
+          ], indent=2))
+          PY
           cat deep-facts-result.json
+          {
+            echo "### deep-facts"
+            echo "- stack: \`$STACK\`"
+            echo "- coverage_pct: **$COV**"
+            echo "- lint_violation_count: **$LINT**"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload deep-facts result (read later by cockpit deep_facts_reader.py, inv#11 GET-only)
         uses: actions/upload-artifact@v4
