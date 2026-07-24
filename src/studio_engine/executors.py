@@ -29,6 +29,16 @@ _NO_TENANT_ID = UUID(int=0)
 # synthetic hyphen-only `chunk-NNN` ids used in this repo's own fixtures.
 _CITATION_RE = re.compile(r"\[([\w#-]+)\]")
 
+# Reserved refusal-declaration token (D4 fix — replaces 71caeb8's structural
+# `refused = not retrieved_chunks`, which conflated "retrieval returned empty"
+# with "the agent refused"). The agent DECLARES a refusal by returning exactly
+# this token as its whole answer; `llm-step` reads that declaration by EXACT
+# match (after strip) — it never NLP-guesses refusal from free prose
+# (`studio_evalhub.agent_runner.AgentAnswer.refused`'s docstring forbids that)
+# and never infers it from chunk presence. A real gateway emits a
+# distinguishable refusal payload; this stub-world sentinel stands in for it.
+REFUSAL_SENTINEL = "[[REFUSED]]"
+
 
 @runtime_checkable
 class NodeExecutor(Protocol):
@@ -122,28 +132,31 @@ class LlmStepExecutor:
         (found against DE's `StaticKbSearch`, which returns `top_k` chunks
         per query, not 1) — it would cite chunks the LLM never used. When
         `retrieved_chunks` is empty (or absent, e.g. no upstream
-        `kb-retrieve` in this walk), `[]` is a valid result (contract §6.1,
-        `packages/kb/docs/contracts/kb-search.v0.md:172-175`) and there is
-        nothing to filter against, so citations fall back to the raw
-        extraction (unchanged, keeps Day 3's
-        `test_llm_step_replays_fixture_answer` green).
+        `kb-retrieve` in this walk, or retrieval was fenced/blocked), `[]` is a
+        valid result (contract §6.1, `packages/kb/docs/contracts/kb-search.v0.md:172-175`)
+        and there is nothing to ground a citation against, so `citations` is
+        `[]` — NOT the raw extraction. An earlier cut fell back to the raw
+        `[chunk_id]` extraction here, which let an ungrounded (hallucinated)
+        marker leak into the trace as a "real" citation and made the smoke-eval
+        score a false-positive citation-accuracy. Grounding is required: no
+        retrieved chunk → no citation.
 
-        `refused` (added D4 follow-up, for `studio_evalhub`'s smoke-eval
-        fail-closed refusal branch — SC-04 cross-tenant / SC-05 cross-role in
-        `packages/kb/golden/smoke-5.yaml`): `True` iff `retrieved_chunks` is
-        empty. This is a STRUCTURAL signal, not a guess on the answer's free
-        text (`studio_evalhub.agent_runner.AgentAnswer.refused`'s docstring
-        explicitly forbids inferring refusal from prose). It is sound because
-        the permission fence lives at retrieval (umbrella-contract §1: "KHÔNG
-        được nhờ LLM 'đừng nói'") — a fenced/no-data query surfaces here as
-        `kb-retrieve` returning `[]`, and the hardcoded 4-node walk (R2) always
-        runs `kb-retrieve` before `llm-step`, so every case in this engine's
-        current scope is KB-grounded and "nothing retrieved" ⟺ "must refuse,
-        not hallucinate" (umbrella-contract §1). Known gap this does NOT
-        cover (tracked, not this field's job): an LLM that hallucinates an
-        answer despite empty `retrieved_chunks` is still marked `refused` here
-        — catching that is the separate "nhánh trả-lời-được không kiểm rò rỉ"
-        gap noted in `packages/kb/docs/format.md` §9b."""
+        `refused` (D4 fix, for `studio_evalhub`'s smoke-eval fail-closed refusal
+        branch — SC-04 cross-tenant / SC-05 cross-role in
+        `packages/kb/golden/smoke-5.yaml`): `True` iff the agent DECLARED a
+        refusal, i.e. `answer.strip() == REFUSAL_SENTINEL`. This reads the
+        agent's own declared signal — it does NOT infer refusal from an empty
+        `retrieved_chunks` (the reverted 71caeb8 signal) and does NOT NLP-guess
+        it from free prose (`studio_evalhub.agent_runner.AgentAnswer.refused`'s
+        docstring forbids that). Why the chunk-based signal was wrong: it
+        conflated two independent facts and mis-scored SC-04 both ways — (1)
+        false-GREEN: retrieval fenced to `[]` but the LLM hallucinates an answer
+        anyway → old `not [] == True` marked it "refused" and the fabrication
+        passed; (2) false-RED: the fence drops the cross-tenant chunk yet
+        leaves valid same-tenant chunks, so a CORRECT refusal on that non-empty
+        walk was marked "not refused". Reading the declared sentinel decouples
+        `refused` from what retrieval happened to return, fixing both. A
+        declared refusal carries no citations (`citations == []`)."""
         raw_prompt = node.params.get("prompt", "")
         raw_kwargs = node.params.get("kwargs", {})
         raw_chunks = node.params.get("retrieved_chunks", [])
@@ -153,17 +166,29 @@ class LlmStepExecutor:
         retrieved_chunks: list[KbSearchResultItem] = raw_chunks if isinstance(raw_chunks, list) else []
 
         answer = await self._llm.complete(prompt, **kwargs)
-        extracted = _CITATION_RE.findall(answer)
-        if retrieved_chunks:
+        refused = answer.strip() == REFUSAL_SENTINEL
+        if refused:
+            # A declared refusal is the whole answer; there is nothing else to
+            # cite, and forcing `[]` keeps the sentinel's own bracket text from
+            # ever parsing as a spurious citation.
+            citations: list[str] = []
+        elif retrieved_chunks:
+            extracted = _CITATION_RE.findall(answer)
             retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
             citations = [chunk_id for chunk_id in extracted if chunk_id in retrieved_ids]
         else:
-            citations = extracted
+            # No chunk was retrieved (empty/blocked retrieval) → there is
+            # NOTHING to ground a citation against, so nothing may be cited. Any
+            # `[chunk_id]` the LLM brackets here is ungrounded/hallucinated; the
+            # earlier "fall back to raw extraction" behavior let that leak into
+            # the trace as a "real" citation and made the smoke-eval score a
+            # false-positive citation-accuracy. Fail closed with `[]`.
+            citations = []
         return {
             "answer": answer,
             "tokens": Tokens(prompt=0, completion=0),
             "citations": citations,
-            "refused": not retrieved_chunks,
+            "refused": refused,
         }
 
 
