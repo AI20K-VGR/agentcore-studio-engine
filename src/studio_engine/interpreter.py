@@ -17,7 +17,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from studio_contracts import (
     LLM,
@@ -116,6 +116,7 @@ async def run(
     run_id = str(uuid.uuid4())
     state: dict[str, object] = {}
     events: list[TraceEvent] = []
+    last_ts: datetime | None = None
     for node_type in _WALK_ORDER:
         node = nodes_by_type[node_type]
         if node_type is NodeType.LLM_STEP:
@@ -131,11 +132,22 @@ async def run(
             tokens = Tokens(prompt=0, completion=0)
             citations = None
         else:
-            outputs = dict(output) if isinstance(output, dict) else {}
-            raw_tokens = outputs.get("tokens")
+            raw_outputs = dict(output) if isinstance(output, dict) else {}
+            raw_tokens = raw_outputs.get("tokens")
             tokens = raw_tokens if isinstance(raw_tokens, Tokens) else Tokens(prompt=0, completion=0)
-            raw_citations = outputs.get("citations")
+            raw_citations = raw_outputs.get("citations")
             citations = raw_citations if isinstance(raw_citations, list) else None
+            # JSON-safe outputs (F15's PgTraceWriter serializes via Jsonb):
+            # a raw Tokens pydantic object can't go through json.dumps as-is.
+            outputs = {
+                key: (value.model_dump(mode="json") if isinstance(value, Tokens) else value)
+                for key, value in raw_outputs.items()
+            }
+
+        now = datetime.now(UTC)
+        if last_ts is not None and now <= last_ts:
+            now = last_ts + timedelta(microseconds=1)
+        last_ts = now
 
         event = TraceEvent(
             event_id=str(uuid.uuid4()),
@@ -144,7 +156,7 @@ async def run(
             tenant_id=recipe.tenant_id,
             node_id=node.id,
             node_type=node_type,
-            ts=datetime.now(UTC).isoformat(timespec="microseconds"),
+            ts=now.isoformat(timespec="microseconds"),
             inputs_hash=hashlib.sha256(json.dumps(node.params, sort_keys=True, default=str).encode()).hexdigest(),
             outputs=outputs,
             tokens=tokens,

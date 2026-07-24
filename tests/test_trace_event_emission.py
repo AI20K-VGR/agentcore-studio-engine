@@ -8,6 +8,7 @@ check — a stub that appends empty/placeholder events must FAIL these.
 
 from __future__ import annotations
 
+import json
 from uuid import UUID
 
 from studio_contracts import (
@@ -125,6 +126,19 @@ async def test_kb_retrieve_event_outputs_wraps_raw_list_in_dict() -> None:
 
     kb_event = next(e for e in result.events if e.node_id == "n_kb")
     assert kb_event.outputs == {"chunks": []}
+
+
+async def test_all_event_outputs_are_json_serializable() -> None:
+    """Regression pin (code-review finding): `TraceEvent.outputs` must never
+    carry a raw pydantic object (e.g. `Tokens`) — `PgTraceWriter.write()`
+    (`apps/studio/src/studio_app/obs/trace_writer.py`) serializes `outputs`
+    via `psycopg.types.json.Jsonb`, which calls `json.dumps` under the hood
+    and would raise `TypeError` on a non-JSON-safe value."""
+    writer = _RecordingTraceWriter()
+    result = await _run(writer)
+
+    for event in result.events:
+        json.dumps(event.outputs)  # must not raise
 
 
 async def test_non_llm_events_have_zero_tokens_and_no_citations() -> None:
