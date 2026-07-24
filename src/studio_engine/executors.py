@@ -74,7 +74,7 @@ class KbRetrieveExecutor:
         """Output shape (v0 stub): the raw `list[KbSearchResultItem]` from
         `KbSearch.search(...)`, passed through unchanged — no post-hoc
         filtering/widening on this side (fence-EXECUTOR duty above). `query`/
-        `tenant`/`section_roles`/`top_k` are read as-given from `node.params`;
+        `tenant_id`/`section_roles`/`top_k` are read as-given from `node.params`;
         Day 3 has no real server-side session/tenant context to resolve
         `section_roles` from, so this stub passes through whatever the node
         carries rather than re-deriving it — real context-threading lands
