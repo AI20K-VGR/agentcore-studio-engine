@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import re
 from typing import Protocol, runtime_checkable
+from uuid import UUID
 
 from studio_contracts import LLM, EmbeddingService, KbSearch, KbSearchResultItem, Node, Tokens
+
+# Sentinel for "no tenant_id in node.params" (Day-3/4/5 stub — no real fence
+# enforcement here yet) — nil UUID so a missing/malformed value never reads
+# as a plausible real tenant.
+_NO_TENANT_ID = UUID(int=0)
 
 # Stub-grade citation extraction (spec AIE-1, phase-1 risk table) — a simple
 # `[chunk_id]` bracket regex, NOT a real citation parser. Good enough for the
@@ -68,21 +74,21 @@ class KbRetrieveExecutor:
         """Output shape (v0 stub): the raw `list[KbSearchResultItem]` from
         `KbSearch.search(...)`, passed through unchanged — no post-hoc
         filtering/widening on this side (fence-EXECUTOR duty above). `query`/
-        `tenant`/`section_roles`/`top_k` are read as-given from `node.params`;
+        `tenant_id`/`section_roles`/`top_k` are read as-given from `node.params`;
         Day 3 has no real server-side session/tenant context to resolve
         `section_roles` from, so this stub passes through whatever the node
         carries rather than re-deriving it — real context-threading lands
         alongside the real `KbSearch` impl (P5)."""
         raw_query = node.params.get("query", "")
-        raw_tenant = node.params.get("tenant", "")
+        raw_tenant_id = node.params.get("tenant_id")
         raw_roles = node.params.get("section_roles", [])
         raw_top_k = node.params.get("top_k", 5)
 
         query = raw_query if isinstance(raw_query, str) else str(raw_query)
-        tenant = raw_tenant if isinstance(raw_tenant, str) else str(raw_tenant)
+        tenant_id = raw_tenant_id if isinstance(raw_tenant_id, UUID) else _NO_TENANT_ID
         section_roles = [str(role) for role in raw_roles] if isinstance(raw_roles, list) else []
         top_k = raw_top_k if isinstance(raw_top_k, int) else int(str(raw_top_k))
-        return await self._kb_search.search(query, tenant, section_roles, top_k)
+        return await self._kb_search.search(query, tenant_id, section_roles, top_k)
 
 
 class LlmStepExecutor:

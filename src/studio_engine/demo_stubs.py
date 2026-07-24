@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 from studio_contracts import KbSearchResultItem
 
@@ -30,11 +31,11 @@ class EmptyKbSearch:
     async def search(
         self,
         query: str,
-        tenant: str,
+        tenant_id: UUID,
         section_roles: list[str],
         top_k: int,
     ) -> list[KbSearchResultItem]:
-        del query, tenant, section_roles, top_k
+        del query, tenant_id, section_roles, top_k
         return []
 
 

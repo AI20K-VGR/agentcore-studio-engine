@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from uuid import UUID
 
 from studio_contracts import AgentConfig, Dag, KbBinding, Node, NodeType, Recipe, ScorecardThreshold, TraceEvent
 
@@ -27,6 +28,11 @@ from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
 # `WhitelistToolDispatch` (constructed by `interpreter.run()` from the
 # recipe's own whitelist) legitimately raises `ValueError`.
 _TOOL_NAME = "search_docs"
+
+# Team-wide canonical UUID for tenant "ankor" (Recipe.tenant_id contract sync,
+# Day 5) — same value as packages/workbench/tests/test_wiring_d4.py:14 and
+# apps/studio/tests/test_trace_writer.py:14, kept identical across quadrants.
+ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 class _NoOpTraceWriter:
@@ -43,8 +49,8 @@ def build_demo_recipe() -> Recipe:
     """Synthetic 4-node `kb-retrieve -> llm-step -> tool-call -> end` recipe
     (same minimal-but-valid shape as
     `test_interpreter_behavior.py::_four_node_recipe` — copied deliberately,
-    not reinvented, per the phase's own risk table). `tenant="ankor"` mirrors
-    the fixture's tenant (`tests/fixtures/llm_step/smoke-01.json`).
+    not reinvented, per the phase's own risk table). `tenant_id=ANKOR_ID`
+    mirrors the fixture's tenant (`tests/fixtures/llm_step/smoke-01.json`).
     """
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
@@ -54,7 +60,7 @@ def build_demo_recipe() -> Recipe:
     ]
     return Recipe(
         agent_id="agent-demo",
-        tenant="ankor",
+        tenant_id=ANKOR_ID,
         agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),

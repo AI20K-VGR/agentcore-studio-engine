@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import UUID
 
 from studio_contracts import (
     AgentConfig,
@@ -28,6 +29,10 @@ from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
 
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "llm_step" / "smoke-01.json"
 _TOOL_NAME = "search_docs"
+# Team-wide canonical UUID for tenant "ankor" — same value as
+# packages/workbench/tests/test_wiring_d4.py:14 and
+# apps/studio/tests/test_trace_writer.py:14.
+ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 class _NoOpTraceWriter:
@@ -56,7 +61,7 @@ def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
         nodes.extend(extra_nodes)
     return Recipe(
         agent_id="agent-1",
-        tenant="ankor",
+        tenant_id=ANKOR_ID,
         agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
