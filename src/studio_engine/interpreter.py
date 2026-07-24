@@ -119,6 +119,16 @@ async def run(
     last_ts: datetime | None = None
     for node_type in _WALK_ORDER:
         node = nodes_by_type[node_type]
+        if node_type is NodeType.KB_RETRIEVE:
+            # Thread the recipe's own tenant identity down into the
+            # `kb-retrieve` executor (same inject-into-params pattern used for
+            # `retrieved_chunks` below). The workbench recipe only puts a tenant
+            # SLUG into `node.params`, never the UUID, so without this the
+            # executor falls back to its nil-UUID sentinel and `KbSearch.search`
+            # runs against `UUID(int=0)` → 0 chunks. `recipe.tenant_id` is a
+            # real `UUID` object (recipe.py:89), which is exactly what
+            # `KbRetrieveExecutor` `isinstance(..., UUID)`-checks for.
+            node = node.model_copy(update={"params": {**node.params, "tenant_id": recipe.tenant_id}})
         if node_type is NodeType.LLM_STEP:
             kb_node_id = nodes_by_type[NodeType.KB_RETRIEVE].id
             node = node.model_copy(update={"params": {**node.params, "retrieved_chunks": state[kb_node_id]}})
