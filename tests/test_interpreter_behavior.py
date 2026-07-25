@@ -29,19 +29,17 @@ from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
 
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "llm_step" / "smoke-01.json"
 _TOOL_NAME = "search_docs"
-# Team-wide canonical UUID for tenant "ankor" — same value as
-# packages/workbench/tests/test_wiring_d4.py:14 and
-# apps/studio/tests/test_trace_writer.py:14.
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 class _NoOpTraceWriter:
-    """`TraceWriter` seam is wired-but-unused this phase (populating real
-    `TraceEvent`s is Day 5 scope) — a conforming no-op is enough to satisfy
-    `run()`'s required keyword param."""
+    """`TraceWriter` seam for testing trace emission."""
+
+    def __init__(self) -> None:
+        self.events: list[TraceEvent] = []
 
     async def write(self, event: TraceEvent) -> None:
-        del event
+        self.events.append(event)
 
 
 def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
@@ -70,13 +68,14 @@ def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
     )
 
 
-async def _run(recipe: Recipe) -> interpreter.RunResult:
+async def _run(recipe: Recipe, trace_writer: _NoOpTraceWriter | None = None) -> interpreter.RunResult:
+    writer = trace_writer if trace_writer is not None else _NoOpTraceWriter()
     return await interpreter.run(
         recipe,
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),
-        trace_writer=_NoOpTraceWriter(),
+        trace_writer=writer,
     )
 
 
@@ -115,3 +114,24 @@ async def test_run_terminates_at_end() -> None:
 
     assert list(result.final_state.keys()) == ["n_kb", "n_llm", "n_tool", "n_end"]
     assert len(result.final_state) == 4
+
+
+async def test_run_emits_trace_events_for_every_node() -> None:
+    """Every executed node must emit a TraceEvent to trace_writer and be returned in result.events."""
+    writer = _NoOpTraceWriter()
+    recipe = _four_node_recipe()
+    result = await _run(recipe, trace_writer=writer)
+
+    assert len(result.events) == 4
+    assert len(writer.events) == 4
+
+    expected_node_ids = ["n_kb", "n_llm", "n_tool", "n_end"]
+    expected_node_types = [NodeType.KB_RETRIEVE, NodeType.LLM_STEP, NodeType.TOOL_CALL, NodeType.END]
+
+    for idx, event in enumerate(result.events):
+        assert event.run_id == result.run_id
+        assert event.agent_id == recipe.agent_id
+        assert event.tenant_id == recipe.tenant_id
+        assert event.node_id == expected_node_ids[idx]
+        assert event.node_type == expected_node_types[idx]
+        assert event.ts is not None

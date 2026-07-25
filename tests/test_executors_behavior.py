@@ -16,6 +16,8 @@ from uuid import UUID
 
 import pytest
 from studio_contracts import KbSearchResultItem, Node, NodeType, Tokens
+
+ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM, WhitelistToolDispatch
 from studio_engine.executors import (
     ConditionExecutor,
@@ -27,10 +29,6 @@ from studio_engine.executors import (
 )
 
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "llm_step" / "smoke-01.json"
-# Team-wide canonical UUID for tenant "ankor" — same value as
-# packages/workbench/tests/test_wiring_d4.py:14 and
-# apps/studio/tests/test_trace_writer.py:14.
-ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 class _HashChunkIdLLM:
@@ -51,7 +49,7 @@ async def test_kb_retrieve_returns_empty_stub() -> None:
     node = Node(
         id="n1",
         type=NodeType.KB_RETRIEVE,
-        params={"query": "leave policy", "tenant_id": ANKOR_ID, "section_roles": ["public"], "top_k": 5},
+        params={"query": "leave policy", "tenant": "ankor", "section_roles": ["public"], "top_k": 5},
     )
     result = await KbRetrieveExecutor(EmptyKbSearch()).execute(node)
     assert result == []

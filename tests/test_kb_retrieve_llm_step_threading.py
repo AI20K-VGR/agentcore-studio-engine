@@ -42,10 +42,7 @@ from studio_engine.demo_stubs import EmptyEmbedding
 
 _TOOL_NAME = "search_docs"
 _REAL_CHUNK_ID = "chunk-042"
-# Team-wide canonical UUID for tenant "ankor" — same value as
-# packages/workbench/tests/test_wiring_d4.py:14 and
-# apps/studio/tests/test_trace_writer.py:14.
-ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
+_ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 class FixtureKbSearch:
@@ -67,7 +64,7 @@ class FixtureKbSearch:
                 chunk_id=_REAL_CHUNK_ID,
                 text="Nhân viên tenant ankor được nghỉ phép năm 12 ngày.",
                 score=0.91,
-                tenant_id=ANKOR_ID,
+                tenant_id=_ANKOR_ID,
                 section_role="public",
             )
         ]
@@ -92,14 +89,14 @@ class MultiChunkFixtureKbSearch:
                 chunk_id="chunk-100",
                 text="Nhân viên tenant ankor được nghỉ phép năm 12 ngày.",
                 score=0.91,
-                tenant_id=ANKOR_ID,
+                tenant_id=_ANKOR_ID,
                 section_role="public",
             ),
             KbSearchResultItem(
                 chunk_id="chunk-101",
                 text="Có thể gộp tối đa 5 ngày phép sang năm sau.",
                 score=0.85,
-                tenant_id=ANKOR_ID,
+                tenant_id=_ANKOR_ID,
                 section_role="public",
             ),
         ]
@@ -133,7 +130,7 @@ def _four_node_recipe() -> Recipe:
     ]
     return Recipe(
         agent_id="agent-1",
-        tenant_id=ANKOR_ID,
+        tenant_id=_ANKOR_ID,
         agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
