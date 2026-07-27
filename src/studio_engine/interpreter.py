@@ -184,6 +184,12 @@ async def run(
     # when no upstream `kb-retrieve` was visited is a valid input per
     # `LlmStepExecutor` ("no retrieved chunk → no citation"), not an error.
     last_kb_output: object = []
+    # The question `llm-step` must answer lives on the `kb-retrieve` node
+    # (`params["query"]`); `llm-step` has none of its own. Threaded from the
+    # same walk-passed node as `last_kb_output`, for the same reason: node
+    # declaration order no longer implies execution order, so a by-type lookup
+    # could supply a sibling branch's query.
+    last_kb_query: object = ""
     # Cycle guard: `_find_start_node_id` only rejects a graph whose every node
     # has an incoming edge, and `_build_next_map` only rejects out-degree > 1.
     # A "lasso" (`a -> b -> b`, or `a -> b -> c -> b`) passes both and would
@@ -212,11 +218,16 @@ async def run(
             # `KbRetrieveExecutor` `isinstance(..., UUID)`-checks for.
             node = node.model_copy(update={"params": {**node.params, "tenant_id": recipe.tenant_id}})
         if node_type is NodeType.LLM_STEP:
-            node = node.model_copy(update={"params": {**node.params, "retrieved_chunks": last_kb_output}})
+            node = node.model_copy(
+                update={
+                    "params": {**node.params, "retrieved_chunks": last_kb_output, "query": last_kb_query}
+                }
+            )
         output = await executors[node_type].execute(node)
         state[node.id] = output
         if node_type is NodeType.KB_RETRIEVE:
             last_kb_output = output
+            last_kb_query = node.params.get("query", "")
 
         if isinstance(output, list):
             outputs: dict[str, object] = {

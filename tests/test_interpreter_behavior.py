@@ -109,11 +109,15 @@ async def test_run_final_state_has_each_node_output() -> None:
     llm_output = final_state["n_llm"]
     assert isinstance(llm_output, dict)
     assert llm_output["answer"] == fixture["response"]
-    # `FixtureLLM` answers real prose (not the refusal sentinel) even though
-    # `EmptyKbSearch` grounded nothing — that is an ungrounded answer, NOT a
-    # declared refusal, so `refused` is False (the fix: refusal is read from the
-    # agent's declaration, not inferred from an empty `retrieved_chunks`).
-    assert llm_output["refused"] is False
+    # `EmptyKbSearch` grounded nothing, so `FixtureLLM`'s `[chunk-001]` bracket
+    # is ungrounded and dropped — `citations` is empty and the run is therefore
+    # a refusal (`refused = not citations`, Day 6). A fabricated answer cannot
+    # buy its way out of the refusal branch by bracketing an id it was never
+    # given; see `tests/test_refusal_from_grounding.py` for why the two earlier
+    # signals (`not retrieved_chunks`, `[[REFUSED]]`) both mis-scored the real
+    # golden set.
+    assert llm_output["citations"] == []
+    assert llm_output["refused"] is True
     assert final_state["n_tool"] == {"tool": _TOOL_NAME, "status": "stub-dispatched"}
     assert final_state["n_end"] == {"terminated": True}
 
