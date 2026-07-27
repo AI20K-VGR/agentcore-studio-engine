@@ -105,6 +105,30 @@ class MultiChunkFixtureKbSearch:
         ]
 
 
+class _TenantCapturingKbSearch:
+    """Test-local `KbSearch` double that RECORDS the `tenant_id` it is called
+    with (and returns `[]`) — proves `interpreter.run()` threads the recipe's
+    own `recipe.tenant_id` down into the `kb-retrieve` executor even when the
+    node's `params` carry no `tenant_id` of their own (the workbench recipe
+    only sets a tenant slug, not the UUID, into `node.params`). Without that
+    threading the executor falls back to its nil-UUID sentinel and `search()`
+    is called with `UUID(int=0)` → 0 real chunks."""
+
+    def __init__(self) -> None:
+        self.seen_tenant_id: UUID | None = None
+
+    async def search(
+        self,
+        query: str,
+        tenant_id: UUID,
+        section_roles: list[str],
+        top_k: int,
+    ) -> list[KbSearchResultItem]:
+        del query, section_roles, top_k
+        self.seen_tenant_id = tenant_id
+        return []
+
+
 class _AnsweringLLM:
     """Test-local `LLM` double — replays a caller-supplied answer string
     verbatim, so a test can control exactly which `[chunk_id]` brackets (if
@@ -150,6 +174,19 @@ async def _run(kb_search: object, llm: object) -> interpreter.RunResult:
         embedding=EmptyEmbedding(),
         trace_writer=_NoOpTraceWriter(),
     )
+
+
+async def test_kb_retrieve_receives_recipe_tenant_id_not_sentinel() -> None:
+    """`interpreter.run()` must inject `recipe.tenant_id` (a real UUID) into
+    the `kb-retrieve` node's params before dispatch, so `KbSearch.search(...)`
+    is called with the recipe's tenant — NOT the executor's nil-UUID sentinel.
+    The recipe's `n_kb` node carries `params={}` (no `tenant_id`); only
+    `recipe.tenant_id` (`ANKOR_ID`) supplies it. A run that never threads it
+    would call `search()` with `UUID(int=0)` and this assertion FAILS."""
+    kb_search = _TenantCapturingKbSearch()
+    await _run(kb_search=kb_search, llm=_AnsweringLLM("x"))
+
+    assert kb_search.seen_tenant_id == ANKOR_ID
 
 
 async def test_llm_step_cites_chunk_that_is_both_retrieved_and_referenced() -> None:
