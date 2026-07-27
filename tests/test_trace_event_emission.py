@@ -14,6 +14,7 @@ from uuid import UUID
 from studio_contracts import (
     AgentConfig,
     Dag,
+    Edge,
     KbBinding,
     Node,
     NodeType,
@@ -51,7 +52,14 @@ def _four_node_recipe() -> Recipe:
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
         agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
-        dag=Dag(nodes=nodes, edges=[]),
+        dag=Dag(
+            nodes=nodes,
+            edges=[
+                Edge(from_="n_kb", to="n_llm"),
+                Edge(from_="n_llm", to="n_tool"),
+                Edge(from_="n_tool", to="n_end"),
+            ],
+        ),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",
         scorecard_threshold=ScorecardThreshold(success=0.8, citation_accuracy=0.8),
