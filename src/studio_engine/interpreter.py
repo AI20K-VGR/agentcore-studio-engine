@@ -220,7 +220,18 @@ async def run(
         if node_type is NodeType.LLM_STEP:
             node = node.model_copy(
                 update={
-                    "params": {**node.params, "retrieved_chunks": last_kb_output, "query": last_kb_query}
+                    "params": {
+                        **node.params,
+                        "retrieved_chunks": last_kb_output,
+                        "query": last_kb_query,
+                        # Day 7: `agent_config.instructions`/`.model` threaded the
+                        # same way as `retrieved_chunks`/`query` above —
+                        # `LlmStepExecutor` reads both from `node.params`, so
+                        # swapping `StubEmbedding`→`GatewayEmbedding` (or
+                        # `FixtureLLM`→a real gateway LLM) never touches this file.
+                        "instructions": recipe.agent_config.instructions,
+                        "model": recipe.agent_config.model,
+                    }
                 }
             )
         output = await executors[node_type].execute(node)

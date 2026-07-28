@@ -188,6 +188,67 @@ async def test_recipe_supplied_prompt_is_used_verbatim() -> None:
     assert llm.prompts[0] == "prompt do recipe khai"
 
 
+def test_build_prompt_includes_instructions_when_given() -> None:
+    """Day 7: `agent_config.instructions` must reach the model. `instructions`
+    is optional (default `""`) so every existing 2-arg call site above keeps
+    its exact prior output — this only adds behavior when the caller opts in."""
+    prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
+
+    assert "Bạn là trợ lý HR của tenant ankor." in prompt
+
+
+def test_build_prompt_without_instructions_is_unchanged() -> None:
+    """No regression: omitting `instructions` must produce byte-identical
+    output to the pre-Day-7 2-arg call."""
+    chunks = [_chunk("ankor-leave-001#c1", "x")]
+
+    assert build_prompt("q", chunks) == build_prompt("q", chunks, instructions="")
+
+
+async def test_interpreter_threads_agent_config_instructions_and_model_into_llm_step() -> None:
+    """Day 7: `interpreter.run` threads `recipe.agent_config.instructions` into
+    the built prompt and `recipe.agent_config.model` into the LLM call's
+    `kwargs["model"]` — same inject-into-params pattern already used for
+    `retrieved_chunks`/`query` (`interpreter.py`'s `LLM_STEP` branch). Neither
+    the published recipe's `llm-step` node nor `_RecordingLLM` declares its
+    own `prompt`/`kwargs["model"]`, so both values must come from threading,
+    not a coincidence."""
+    llm = _RecordingLLM()
+    nodes = [
+        Node(
+            id="n1",
+            type=NodeType.KB_RETRIEVE,
+            params={"query": "Nghỉ phép năm bao nhiêu ngày?", "section_roles": ["public"], "top_k": 3},
+        ),
+        Node(id="n2", type=NodeType.LLM_STEP, params={}),
+        Node(id="n3", type=NodeType.END, params={}),
+    ]
+    recipe = Recipe(
+        agent_id="agent-1",
+        tenant_id=ANKOR_ID,
+        agent_config=AgentConfig(
+            instructions="Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR.",
+            model="gateway-model-x",
+            tool_whitelist=[],
+        ),
+        dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
+        kb_binding=KbBinding(kb_id="kb-1", scope="ankor/hr"),
+        golden_set_ref="golden-1",
+        scorecard_threshold=ScorecardThreshold(success=0.8, citation_accuracy=0.8),
+    )
+
+    await interpreter.run(
+        recipe,
+        kb_search=_FixedKbSearch([_chunk("ankor-leave-001#c1", "12 ngày mỗi năm.")]),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+    )
+
+    assert "Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR." in llm.prompts[0]
+    assert llm.kwargs[0]["model"] == "gateway-model-x"
+
+
 async def test_interpreter_threads_the_walk_upstream_query_into_llm_step() -> None:
     """The query lives on the `kb-retrieve` node; `llm-step` has no query of its
     own. `interpreter.run` threads it the same way it threads

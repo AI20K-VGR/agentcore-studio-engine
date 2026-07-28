@@ -68,6 +68,32 @@ class EmptyEmbedding:
         return []
 
 
+_EMBED_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "embedding"
+
+
+class StubEmbedding:
+    """Day 7 deliverable — the CI-blessed stub-local impl of `EmbeddingService`
+    (`protocols.py`'s "2 impl expected: stub local fixtures (CI, 100%) +
+    gateway"). VCR-style replay of `tests/fixtures/embedding/<case_id>.json`
+    (same convention as `FixtureLLM` above): `embed()` ignores its `texts`
+    argument and replays the recorded `response` vectors verbatim, so CI never
+    calls a real model/network. Vector width is fixed at 8, matching
+    `packages/kb/src/studio_kb/schema.py::EMBEDDING_DIM` (documented
+    invariant, not imported — `.importlinter` forbids `studio_engine`
+    importing `studio_kb`); re-pin both constants together if that width
+    ever changes.
+    """
+
+    def __init__(self, case_id: str) -> None:
+        self._case_id = case_id
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        del texts
+        fixture_path = _EMBED_FIXTURES_DIR / f"{self._case_id}.json"
+        data = json.loads(fixture_path.read_text(encoding="utf-8"))
+        return [list(vector) for vector in data["response"]]
+
+
 class WhitelistToolDispatch:
     """Day 3 demo-only — Day 6 replaces with real composition in
     `apps/studio`. Stub `tool-call` dispatcher: raises `ValueError` for a
