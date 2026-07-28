@@ -18,7 +18,6 @@ import pytest
 from studio_contracts import KbSearchResultItem, Node, NodeType, Tokens
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM, WhitelistToolDispatch
 from studio_engine.executors import (
-    REFUSAL_SENTINEL,
     ConditionExecutor,
     EndExecutor,
     HitlPauseExecutor,
@@ -44,17 +43,6 @@ class _HashChunkIdLLM:
     async def complete(self, prompt: str, **kwargs: object) -> str:
         del prompt, kwargs
         return "Nhân viên báo trước 3 ngày làm việc. [ankor-leave-001#c1]"
-
-
-class _RefusingLLM:
-    """Test `LLM` double whose WHOLE answer is exactly `REFUSAL_SENTINEL` — the
-    agent's DECLARED refusal (what a real gateway emits when it declines). The
-    executor must read this by exact-match, never by NLP-guessing the prose and
-    never by inferring from chunk presence."""
-
-    async def complete(self, prompt: str, **kwargs: object) -> str:
-        del prompt, kwargs
-        return REFUSAL_SENTINEL
 
 
 async def test_kb_retrieve_returns_empty_stub() -> None:
@@ -103,77 +91,6 @@ async def test_llm_step_replays_fixture_answer() -> None:
     assert result["tokens"] == Tokens(prompt=0, completion=0)
     assert result["citations"] == ["chunk-001"]
     # A real fixture answer (not the sentinel) is content, not a refusal → False.
-    assert result["refused"] is False
-
-
-async def test_llm_step_refused_true_when_agent_declares_sentinel() -> None:
-    """`refused` reads the agent's DECLARED signal — an answer that is exactly
-    `REFUSAL_SENTINEL` — NOT `not retrieved_chunks` (the 71caeb8 bug that
-    conflated "retrieval empty" with "agent refused"). Non-empty
-    `retrieved_chunks` are present ON PURPOSE here: they prove the flag ignores
-    chunk presence — the agent refused even though grounding was available.
-    This fixes the false-RED where a correct refusal on a non-empty walk was
-    scored as not-refused. A declared refusal carries NO citations."""
-    node = Node(
-        id="n2r",
-        type=NodeType.LLM_STEP,
-        params={
-            "prompt": "x",
-            "kwargs": {},
-            "retrieved_chunks": [
-                KbSearchResultItem(
-                    chunk_id="ankor-leave-001#c1",
-                    text="Báo trước tối thiểu 3 ngày làm việc.",
-                    score=0.9,
-                    tenant_id=ANKOR_ID,
-                    section_role="public",
-                )
-            ],
-        },
-    )
-    result = await LlmStepExecutor(_RefusingLLM(), EmptyEmbedding()).execute(node)
-    assert isinstance(result, dict)
-    assert result["refused"] is True
-    assert result["citations"] == []
-
-
-async def test_llm_step_not_refused_when_agent_answers_despite_no_chunks() -> None:
-    """The false-GREEN the 71caeb8 structural signal let through: retrieval
-    returns nothing, but the agent ANSWERS anyway (hallucinates) instead of
-    declaring the sentinel. `refused` MUST be `False` so the evalhub refusal
-    branch (SC-04/SC-05, `packages/kb/golden/smoke-5.yaml`) scores this
-    fabrication as a FAIL — not a green refusal. Old logic marked it `True`
-    (chunks empty) and let the made-up answer pass."""
-    node = Node(id="n2h", type=NodeType.LLM_STEP, params={"prompt": "x", "kwargs": {}})
-    result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
-    assert isinstance(result, dict)
-    assert result["refused"] is False
-
-
-async def test_llm_step_not_refused_on_normal_grounded_answer() -> None:
-    """A real grounded answer (not the sentinel) with non-empty
-    `retrieved_chunks` → `refused` `False`. Same outcome as before the fix but
-    now for the RIGHT reason: the answer is not the declared refusal token,
-    independent of chunk presence."""
-    node = Node(
-        id="n2d",
-        type=NodeType.LLM_STEP,
-        params={
-            "prompt": "x",
-            "kwargs": {},
-            "retrieved_chunks": [
-                KbSearchResultItem(
-                    chunk_id="ankor-leave-001#c1",
-                    text="Báo trước tối thiểu 3 ngày làm việc.",
-                    score=0.9,
-                    tenant_id=ANKOR_ID,
-                    section_role="public",
-                )
-            ],
-        },
-    )
-    result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
-    assert isinstance(result, dict)
     assert result["refused"] is False
 
 

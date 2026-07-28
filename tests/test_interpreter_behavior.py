@@ -17,6 +17,7 @@ from uuid import UUID
 from studio_contracts import (
     AgentConfig,
     Dag,
+    Edge,
     KbBinding,
     Node,
     NodeType,
@@ -44,13 +45,16 @@ class _NoOpTraceWriter:
         del event
 
 
-def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
+def _four_node_recipe(*, extra_nodes: list[Node] | None = None, extra_edges: list[Edge] | None = None) -> Recipe:
     """4-node `kb-retrieve -> llm-step -> tool-call -> end` recipe (shape
     mirrors the Day-2 minimal-recipe pattern, extended to a real 4-node
     `dag.nodes` list). `tool_whitelist` includes `_TOOL_NAME`,
     the same name the `tool-call` node's `params={"tool": ...}` carries —
     must match what `run()` constructs `WhitelistToolDispatch` with,
-    otherwise the dispatcher legitimately raises."""
+    otherwise the dispatcher legitimately raises. `dag.edges` chains the 4
+    nodes linearly (Day 6: `run()` walks by edge, not by a hardcoded
+    `NodeType` order) — `extra_edges` lets a caller attach `extra_nodes`
+    without becoming a second ambiguous start candidate."""
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_llm", type=NodeType.LLM_STEP, params={}),
@@ -59,11 +63,18 @@ def _four_node_recipe(*, extra_nodes: list[Node] | None = None) -> Recipe:
     ]
     if extra_nodes:
         nodes.extend(extra_nodes)
+    edges = [
+        Edge(from_="n_kb", to="n_llm"),
+        Edge(from_="n_llm", to="n_tool"),
+        Edge(from_="n_tool", to="n_end"),
+    ]
+    if extra_edges:
+        edges.extend(extra_edges)
     return Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
         agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
-        dag=Dag(nodes=nodes, edges=[]),
+        dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",
         scorecard_threshold=ScorecardThreshold(success=0.8, citation_accuracy=0.8),
@@ -98,24 +109,32 @@ async def test_run_final_state_has_each_node_output() -> None:
     llm_output = final_state["n_llm"]
     assert isinstance(llm_output, dict)
     assert llm_output["answer"] == fixture["response"]
-    # `FixtureLLM` answers real prose (not the refusal sentinel) even though
-    # `EmptyKbSearch` grounded nothing — that is an ungrounded answer, NOT a
-    # declared refusal, so `refused` is False (the fix: refusal is read from the
-    # agent's declaration, not inferred from an empty `retrieved_chunks`).
-    assert llm_output["refused"] is False
+    # `EmptyKbSearch` grounded nothing, so `FixtureLLM`'s `[chunk-001]` bracket
+    # is ungrounded and dropped — `citations` is empty and the run is therefore
+    # a refusal (`refused = not citations`, Day 6). A fabricated answer cannot
+    # buy its way out of the refusal branch by bracketing an id it was never
+    # given; see `tests/test_refusal_from_grounding.py` for why the two earlier
+    # signals (`not retrieved_chunks`, `[[REFUSED]]`) both mis-scored the real
+    # golden set.
+    assert llm_output["citations"] == []
+    assert llm_output["refused"] is True
     assert final_state["n_tool"] == {"tool": _TOOL_NAME, "status": "stub-dispatched"}
     assert final_state["n_end"] == {"terminated": True}
 
 
 async def test_run_terminates_at_end() -> None:
-    """A 5th dangling `condition` node proves the walk genuinely stops at
-    `end`: `ConditionExecutor.execute` always raises `NotImplementedError`
-    (still-unfilled seam), so an implementation that dynamically iterates
-    ALL of `recipe.dag.nodes` instead of this phase's hardcoded 4-type walk
-    (forbidden by the plan's risk table, R2) would trip over it and blow up
-    here — a vacuous "just don't touch it" implementation can't fake this."""
+    """A 5th `condition` node, self-looped (its only edge points to itself,
+    so it is never a `_find_start_node_id` candidate and nothing in the
+    real `n_kb->n_llm->n_tool->n_end` chain ever edges into it), proves the
+    walk stops exactly at `end` without ever reaching an unrelated node:
+    `ConditionExecutor.execute` always raises `NotImplementedError`, so an
+    implementation that iterated `recipe.dag.nodes` directly (ignoring
+    `dag.edges` reachability) instead of walking edge-by-edge would trip
+    over it and blow up here — a vacuous "just don't touch it"
+    implementation can't fake this."""
     dangling = Node(id="n_dangling", type=NodeType.CONDITION, params={})
-    result = await _run(_four_node_recipe(extra_nodes=[dangling]))
+    self_loop = Edge(from_="n_dangling", to="n_dangling")
+    result = await _run(_four_node_recipe(extra_nodes=[dangling], extra_edges=[self_loop]))
 
     assert list(result.final_state.keys()) == ["n_kb", "n_llm", "n_tool", "n_end"]
     assert len(result.final_state) == 4
