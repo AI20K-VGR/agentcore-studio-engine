@@ -228,9 +228,11 @@ class LlmStepExecutor:
         # `kwargs["model"]` only when the recipe hasn't already declared its
         # own `kwargs["model"]` — a recipe-declared kwarg is a deliberate
         # author choice and wins, same precedence as `declared_prompt` above.
-        # No current LLM double reads this key (`FixtureLLM`/`StubEmbedding`
-        # ignore all kwargs) — this only pre-wires the seam so a future
-        # `GatewayLLM` can read it without another interpreter/executor change.
+        # No current `LLM` impl reads this key (`FixtureLLM.complete` ignores
+        # all kwargs; `apps/studio/providers/gemini.py::GeminiProvider.complete`
+        # also discards kwargs, using its own `self._model` instead) — this
+        # only pre-wires the seam so a future `GatewayLLM` can read it without
+        # another interpreter/executor change.
         if model and "model" not in kwargs:
             kwargs["model"] = model
 
