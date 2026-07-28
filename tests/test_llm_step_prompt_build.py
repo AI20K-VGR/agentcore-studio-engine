@@ -84,6 +84,18 @@ class _FixedKbSearch:
         return list(self._chunks)
 
 
+class _AltEmbedding:
+    """A second, distinct `EmbeddingService` double — NOT `EmptyEmbedding`,
+    NOT `StubEmbedding`. Its only purpose is to prove the Day 7 "swap
+    StubEmbedding → GatewayEmbedding needs no interpreter.py change" claim: if
+    `interpreter.run` type-checked or branched on the concrete embedding
+    class anywhere, swapping in an unrelated double here would fail loudly
+    instead of running identically."""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0] for _ in texts]
+
+
 def test_built_prompt_carries_every_chunk_id_and_text() -> None:
     """Each retrieved chunk appears under its own bracketed `chunk_id`. The id
     must be in the prompt verbatim and in bracket form — that is the exact token
@@ -186,6 +198,121 @@ async def test_recipe_supplied_prompt_is_used_verbatim() -> None:
     await LlmStepExecutor(llm, EmptyEmbedding()).execute(node)
 
     assert llm.prompts[0] == "prompt do recipe khai"
+
+
+def test_build_prompt_includes_instructions_when_given() -> None:
+    """Day 7: `agent_config.instructions` must reach the model. `instructions`
+    is optional (default `""`) so every existing 2-arg call site above keeps
+    its exact prior output — this only adds behavior when the caller opts in."""
+    prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
+
+    assert "Bạn là trợ lý HR của tenant ankor." in prompt
+
+
+def test_build_prompt_without_instructions_starts_with_the_fixed_header() -> None:
+    """No regression: omitting `instructions` must still open the prompt
+    directly with the fixed header — no leading instructions block, no blank
+    line before it. Pinned against the literal header text (not a
+    self-comparison of `build_prompt` against itself, which would pass even if
+    the guard branch were removed and the header always got an empty-string
+    prefix)."""
+    prompt = build_prompt("q", [_chunk("ankor-leave-001#c1", "x")])
+
+    assert prompt.startswith(
+        "Bạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
+        "và trích dẫn chunk_id trong ngoặc vuông.\n"
+    )
+
+
+def test_build_prompt_with_instructions_prefixes_before_the_fixed_header() -> None:
+    """The opposite pin: a non-empty `instructions` must appear BEFORE the
+    fixed header, separated by a blank line — proving the two branches in
+    `build_prompt` actually differ, not just that "instructions" appears
+    somewhere in a long string."""
+    prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
+
+    assert prompt.startswith(
+        "Bạn là trợ lý HR của tenant ankor.\n\n"
+        "Bạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
+    )
+
+
+async def test_interpreter_threads_agent_config_instructions_and_model_into_llm_step() -> None:
+    """Day 7: `interpreter.run` threads `recipe.agent_config.instructions` into
+    the built prompt and `recipe.agent_config.model` into the LLM call's
+    `kwargs["model"]` — same inject-into-params pattern already used for
+    `retrieved_chunks`/`query` (`interpreter.py`'s `LLM_STEP` branch). Neither
+    the published recipe's `llm-step` node nor `_RecordingLLM` declares its
+    own `prompt`/`kwargs["model"]`, so both values must come from threading,
+    not a coincidence."""
+    llm = _RecordingLLM()
+    nodes = [
+        Node(
+            id="n1",
+            type=NodeType.KB_RETRIEVE,
+            params={"query": "Nghỉ phép năm bao nhiêu ngày?", "section_roles": ["public"], "top_k": 3},
+        ),
+        Node(id="n2", type=NodeType.LLM_STEP, params={}),
+        Node(id="n3", type=NodeType.END, params={}),
+    ]
+    recipe = Recipe(
+        agent_id="agent-1",
+        tenant_id=ANKOR_ID,
+        agent_config=AgentConfig(
+            instructions="Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR.",
+            model="gateway-model-x",
+            tool_whitelist=[],
+        ),
+        dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
+        kb_binding=KbBinding(kb_id="kb-1", scope="ankor/hr"),
+        golden_set_ref="golden-1",
+        scorecard_threshold=ScorecardThreshold(success=0.8, citation_accuracy=0.8),
+    )
+
+    await interpreter.run(
+        recipe,
+        kb_search=_FixedKbSearch([_chunk("ankor-leave-001#c1", "12 ngày mỗi năm.")]),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+    )
+
+    assert "Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR." in llm.prompts[0]
+    assert llm.kwargs[0]["model"] == "gateway-model-x"
+
+
+async def test_swapping_the_embedding_impl_needs_no_interpreter_change() -> None:
+    """Day 7 seam claim, exercised rather than assumed: `interpreter.run`
+    never type-checks or branches on the concrete `EmbeddingService` impl —
+    swapping `EmptyEmbedding`/`StubEmbedding` for an unrelated third double
+    (`_AltEmbedding`, defined only in this test file) must run identically
+    with zero changes to `interpreter.py`/`executors.py`. This is the same
+    property a future `StubEmbedding` → `GatewayEmbedding` swap relies on."""
+    llm = _RecordingLLM()
+    nodes = [
+        Node(id="n1", type=NodeType.KB_RETRIEVE, params={"query": "q", "section_roles": ["public"], "top_k": 1}),
+        Node(id="n2", type=NodeType.LLM_STEP, params={}),
+        Node(id="n3", type=NodeType.END, params={}),
+    ]
+    recipe = Recipe(
+        agent_id="agent-1",
+        tenant_id=ANKOR_ID,
+        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
+        kb_binding=KbBinding(kb_id="kb-1", scope="ankor/hr"),
+        golden_set_ref="golden-1",
+        scorecard_threshold=ScorecardThreshold(success=0.8, citation_accuracy=0.8),
+    )
+
+    result = await interpreter.run(
+        recipe,
+        kb_search=_FixedKbSearch([_chunk("ankor-leave-001#c1", "x")]),
+        llm=llm,
+        embedding=_AltEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+    )
+
+    assert result.final_state["n3"] == {"terminated": True}
 
 
 async def test_interpreter_threads_the_walk_upstream_query_into_llm_step() -> None:

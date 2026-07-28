@@ -51,6 +51,34 @@ của fixture — tách citation thành field riêng sẽ ghi sai cái model th�
 **100% synthetic** (luật NDA) — dùng tenant giả `ankor` (đã dùng xuyên suốt umbrella-contract),
 không tên người/công ty thật.
 
+## Fixture format — VCR-style cho `EmbeddingService` (Day 7)
+
+**Cập nhật Day 7**: nhánh **phát** (replay) đã có — `studio_engine.demo_stubs.StubEmbedding` đọc
+đúng file theo format dưới đây, trả `response` cho `EmbeddingService.embed` (CI-blessed stub-local
+impl trong "2 impl expected: stub local fixtures + gateway", xem `protocols.py`). Nhánh **ghi** vẫn
+chưa build.
+
+**Vị trí:** `tests/fixtures/embedding/<case_id>.json` — 1 file = 1 lời gọi `EmbeddingService.embed`
+trong 1 test-case, cùng convention với `tests/fixtures/llm_step/` ở trên.
+
+**Hình dạng** (xem ví dụ `tests/fixtures/embedding/smoke-01.json`):
+
+```json
+{
+  "case_id": "smoke-01",
+  "request": { "texts": ["a", "b"] },
+  "response": [[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]]
+}
+```
+
+`response` là list vector — `StubEmbedding.embed()` ignore nội dung `texts`, cycle qua các vector đã
+ghi để luôn trả đúng `len(texts)` vector (giữ invariant "1 vector / 1 input text" của
+`EmbeddingService.embed` dù stub không content-aware). Vector width cố định 8, khớp
+`packages/kb/src/studio_kb/schema.py::EMBEDDING_DIM` (documented invariant, không import trực tiếp —
+`.importlinter` cấm `studio_engine` import `studio_kb`).
+
+**100% synthetic** (luật NDA) — như trên.
+
 ## CLI demo (Day 3)
 
 `python -m studio_engine` chạy 1 recipe synthetic 4-node (`kb-retrieve → llm-step → tool-call →
