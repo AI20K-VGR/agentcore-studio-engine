@@ -57,6 +57,27 @@ async def test_kb_retrieve_returns_empty_stub() -> None:
     assert result == []
 
 
+async def test_kb_retrieve_raises_when_tenant_id_absent() -> None:
+    """Day 8 fail-closed (INV-1): a `kb-retrieve` node whose `params` carry
+    no `tenant_id` at all must raise `PermissionError`, NOT silently return
+    `[]`. Before this phase the executor fell back to a nil-UUID sentinel —
+    indistinguishable from "this tenant genuinely has 0 chunks", which is
+    exactly the fail-closed-by-luck-not-by-contract bug this phase kills."""
+    node = Node(id="n1", type=NodeType.KB_RETRIEVE, params={"query": "leave policy"})
+    with pytest.raises(PermissionError):
+        await KbRetrieveExecutor(EmptyKbSearch()).execute(node)
+
+
+async def test_kb_retrieve_raises_when_tenant_id_is_slug_not_uuid() -> None:
+    """A `tenant_id` present but shaped as a client-declared slug (`"ankor"`,
+    not a real `UUID`) must also raise — the executor never coerces a slug
+    into a tenant identity itself; only a real `UUID` (session-supplied via
+    `interpreter.run`) is accepted."""
+    node = Node(id="n1b", type=NodeType.KB_RETRIEVE, params={"query": "x", "tenant_id": "ankor"})
+    with pytest.raises(PermissionError):
+        await KbRetrieveExecutor(EmptyKbSearch()).execute(node)
+
+
 async def test_llm_step_replays_fixture_answer() -> None:
     """`FixtureLLM("smoke-01")` replays `tests/fixtures/llm_step/smoke-01.json`.
     `citations` must be a REAL regex extraction of `[chunk-001]` out of the
