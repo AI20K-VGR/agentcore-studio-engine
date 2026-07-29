@@ -228,12 +228,16 @@ async def run(
             # for `retrieved_chunks` below) — never the recipe's own tenant
             # field, which is client-declared and exactly the value INV-1
             # must not trust.
-            # The workbench recipe only puts a tenant SLUG into `node.params`,
-            # never the UUID, so without this the executor falls back to its
-            # nil-UUID sentinel and `KbSearch.search` runs against
-            # `UUID(int=0)` → 0 chunks. `session_context.tenant_id` is a real
-            # `UUID` (see `studio_engine.session`), which is exactly what
-            # `KbRetrieveExecutor` `isinstance(..., UUID)`-checks for.
+            # `session_context.tenant_id` is set AFTER the `**node.params`
+            # spread on purpose: whatever tenant identity a client-authored
+            # node already carries in its own params (the workbench recipe
+            # only ever puts a tenant SLUG there, never a UUID, but nothing
+            # stops a hand-crafted recipe from putting a UUID) is always
+            # overwritten by the session's, never merely supplemented — a
+            # missing/malformed value post-override still fails closed at
+            # `KbRetrieveExecutor` (`isinstance(..., UUID)`-check, raises
+            # `PermissionError`, see `executors.py`), it does not fall back
+            # to a sentinel (that fallback was removed, Day 8 phase 2).
             node = node.model_copy(update={"params": {**node.params, "tenant_id": session_context.tenant_id}})
         if node_type is NodeType.LLM_STEP:
             node = node.model_copy(

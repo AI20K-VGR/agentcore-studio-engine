@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
+import pytest
 from studio_contracts import (
     AgentConfig,
     Dag,
@@ -92,14 +93,19 @@ class _NoOpTraceWriter:
         del event
 
 
-def _kb_then_end_recipe(*, recipe_tenant_id: UUID) -> Recipe:
+def _kb_then_end_recipe(*, recipe_tenant_id: UUID, node_tenant_id: UUID | None = None) -> Recipe:
     """Minimal 2-node `kb-retrieve -> end` recipe. `recipe_tenant_id` is the
     CLIENT-declared value on the recipe document — the money-shot tests set
     this to `BOREA_ID` while the session carries `ANKOR_ID`, to prove the
     mismatch is resolved in the session's favor everywhere `run()` reads
-    tenant identity."""
+    tenant identity. `node_tenant_id`, when given, seeds the `kb-retrieve`
+    node's OWN `params["tenant_id"]` — a second, node-level client-declared
+    value distinct from `recipe.tenant_id`, so a test can prove
+    `interpreter.run()`'s param-merge always overwrites it with the
+    session's, never merely supplements it."""
+    kb_params: dict[str, object] = {"tenant_id": node_tenant_id} if node_tenant_id is not None else {}
     nodes = [
-        Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
+        Node(id="n_kb", type=NodeType.KB_RETRIEVE, params=kb_params),
         Node(id="n_end", type=NodeType.END, params={}),
     ]
     return Recipe(
@@ -122,9 +128,11 @@ async def test_frozen_dataclass_satisfies_session_context_protocol() -> None:
 
 async def test_run_requires_session_context() -> None:
     """`run()` has no default for `session_context` — omitting it is a
-    `TypeError` at call time, not a silent None/sentinel fallback."""
+    `TypeError` at call time, not a silent None/sentinel fallback. Matches
+    on "session_context" specifically so this test cannot false-pass on an
+    unrelated `TypeError` (e.g. a different missing keyword)."""
     recipe = _kb_then_end_recipe(recipe_tenant_id=ANKOR_ID)
-    try:
+    with pytest.raises(TypeError, match="session_context"):
         await interpreter.run(  # type: ignore[call-arg]
             recipe,
             kb_search=_TenantCapturingKbSearch(),
@@ -132,9 +140,6 @@ async def test_run_requires_session_context() -> None:
             embedding=EmptyEmbedding(),
             trace_writer=_NoOpTraceWriter(),
         )
-    except TypeError:
-        return
-    raise AssertionError("run() must raise TypeError when session_context is omitted")
 
 
 async def test_kb_search_receives_session_tenant_not_recipe_tenant() -> None:
@@ -144,6 +149,33 @@ async def test_kb_search_receives_session_tenant_not_recipe_tenant() -> None:
     stub can't false-pass the negative half."""
     kb_search = _TenantCapturingKbSearch()
     recipe = _kb_then_end_recipe(recipe_tenant_id=BOREA_ID)
+
+    await interpreter.run(
+        recipe,
+        session_context=default_session_context(tenant_id=ANKOR_ID),
+        kb_search=kb_search,
+        llm=None,  # type: ignore[arg-type]
+        embedding=EmptyEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+    )
+
+    assert kb_search.seen_tenant_id == ANKOR_ID
+    assert kb_search.seen_tenant_id != BOREA_ID
+
+
+async def test_node_params_tenant_id_is_overwritten_not_merely_supplemented() -> None:
+    """A hand-crafted `kb-retrieve` node can already carry its OWN
+    `params["tenant_id"]` (`BOREA_ID`) alongside a session of `ANKOR_ID` —
+    a second, node-level client-declared value distinct from
+    `recipe.tenant_id`. `interpreter.run()`'s `{**node.params, "tenant_id":
+    session_context.tenant_id}` merge order must OVERWRITE it, not just
+    supplement missing keys: `KbSearch.search()` still must see `ANKOR_ID`.
+    Pins the merge order the dict-spread relies on — swapping it (session
+    first, `**node.params` last, letting a pre-set client value win) would
+    leave every other test in this module green but silently reopen the
+    fence here."""
+    kb_search = _TenantCapturingKbSearch()
+    recipe = _kb_then_end_recipe(recipe_tenant_id=BOREA_ID, node_tenant_id=BOREA_ID)
 
     await interpreter.run(
         recipe,

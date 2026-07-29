@@ -139,10 +139,13 @@ class KbRetrieveExecutor:
         raw_top_k = node.params.get("top_k", 5)
 
         if not isinstance(raw_tenant_id, UUID):
+            # Report only the caller-supplied value's TYPE, never the value
+            # itself — it is unvalidated data that could otherwise flow into
+            # logs/error bodies verbatim.
             raise PermissionError(
                 "kb-retrieve node.params['tenant_id'] must be a real UUID sourced from "
                 "session_context (INV-1) — executor never sets/derives tenant identity itself. "
-                f"Got: {raw_tenant_id!r}"
+                f"Got a value of type {type(raw_tenant_id).__name__!r}."
             )
 
         query = raw_query if isinstance(raw_query, str) else str(raw_query)
