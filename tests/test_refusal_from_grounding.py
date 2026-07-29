@@ -55,6 +55,7 @@ from studio_contracts import (
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding
 from studio_engine.executors import LlmStepExecutor
+from test_session_context_tenant_wall import default_session_context
 
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
@@ -223,6 +224,7 @@ async def test_golden_case_refusal_flag_matches_its_label(
 
     result = await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=_MeasuredKbSearch(retrieved),
         llm=_ReplayLLM(answer),
         embedding=EmptyEmbedding(),

@@ -27,6 +27,7 @@ from studio_contracts import (
 )
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
+from test_session_context_tenant_wall import default_session_context
 
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "llm_step" / "smoke-01.json"
 _TOOL_NAME = "search_docs"
@@ -84,6 +85,7 @@ def _four_node_recipe(*, extra_nodes: list[Node] | None = None, extra_edges: lis
 async def _run(recipe: Recipe) -> interpreter.RunResult:
     return await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),

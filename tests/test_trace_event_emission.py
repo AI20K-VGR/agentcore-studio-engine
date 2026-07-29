@@ -24,6 +24,7 @@ from studio_contracts import (
 )
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
+from test_session_context_tenant_wall import default_session_context
 
 _TOOL_NAME = "search_docs"
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
@@ -69,6 +70,7 @@ def _four_node_recipe() -> Recipe:
 async def _run(writer: _RecordingTraceWriter) -> interpreter.RunResult:
     return await interpreter.run(
         _four_node_recipe(),
+        session_context=default_session_context(),
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),

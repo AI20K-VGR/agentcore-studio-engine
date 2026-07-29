@@ -29,6 +29,7 @@ from studio_contracts import (
 )
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
+from test_session_context_tenant_wall import default_session_context
 
 _TOOL_NAME = "search_docs"
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
@@ -54,6 +55,7 @@ def _recipe(nodes: list[Node], edges: list[Edge]) -> Recipe:
 async def _run(recipe: Recipe) -> interpreter.RunResult:
     return await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),
@@ -201,6 +203,7 @@ async def test_reachable_self_loop_raises_instead_of_walking_forever() -> None:
     with pytest.raises(ValueError, match="cycle"):
         await interpreter.run(
             _recipe(nodes, edges),
+            session_context=default_session_context(),
             kb_search=EmptyKbSearch(),
             llm=FixtureLLM("smoke-01"),
             embedding=EmptyEmbedding(),
@@ -227,6 +230,7 @@ async def test_reachable_multi_node_cycle_raises_instead_of_walking_forever() ->
     with pytest.raises(ValueError, match="cycle"):
         await interpreter.run(
             _recipe(nodes, edges),
+            session_context=default_session_context(),
             kb_search=EmptyKbSearch(),
             llm=FixtureLLM("smoke-01"),
             embedding=EmptyEmbedding(),
@@ -275,6 +279,7 @@ async def test_llm_step_threads_chunks_from_its_walk_upstream_kb_not_last_declar
     ]
     result = await interpreter.run(
         _recipe(nodes, edges),
+        session_context=default_session_context(),
         kb_search=_SequentialKbSearch(),
         llm=_AnsweringLLM("Theo tài liệu vừa tra cứu. [chunk-call2]"),
         embedding=EmptyEmbedding(),
@@ -300,6 +305,7 @@ async def test_llm_step_without_upstream_kb_retrieve_threads_empty_not_key_error
     edges = [Edge(from_="n_llm", to="n_end")]
     result = await interpreter.run(
         _recipe(nodes, edges),
+        session_context=default_session_context(),
         kb_search=_SequentialKbSearch(),
         llm=_AnsweringLLM("Không có tài liệu nào được tra cứu. [chunk-call1]"),
         embedding=EmptyEmbedding(),

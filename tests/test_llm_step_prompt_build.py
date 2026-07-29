@@ -39,6 +39,7 @@ from studio_contracts import (
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding
 from studio_engine.executors import LlmStepExecutor, build_prompt
+from test_session_context_tenant_wall import default_session_context
 
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
@@ -271,6 +272,7 @@ async def test_interpreter_threads_agent_config_instructions_and_model_into_llm_
 
     await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=_FixedKbSearch([_chunk("ankor-leave-001#c1", "12 ngày mỗi năm.")]),
         llm=llm,
         embedding=EmptyEmbedding(),
@@ -306,6 +308,7 @@ async def test_swapping_the_embedding_impl_needs_no_interpreter_change() -> None
 
     result = await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=_FixedKbSearch([_chunk("ankor-leave-001#c1", "x")]),
         llm=llm,
         embedding=_AltEmbedding(),
@@ -343,6 +346,7 @@ async def test_interpreter_threads_the_walk_upstream_query_into_llm_step() -> No
 
     await interpreter.run(
         recipe,
+        session_context=default_session_context(),
         kb_search=_FixedKbSearch([_chunk("ankor-expense-001#c2", "Hạn mức 20 triệu đồng.")]),
         llm=llm,
         embedding=EmptyEmbedding(),

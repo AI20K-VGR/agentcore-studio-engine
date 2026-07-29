@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from uuid import UUID
 
 from studio_contracts import AgentConfig, Dag, Edge, KbBinding, Node, NodeType, Recipe, ScorecardThreshold, TraceEvent
@@ -33,6 +34,18 @@ _TOOL_NAME = "search_docs"
 # Day 5) — same value as packages/workbench/tests/test_wiring_d4.py:14 and
 # apps/studio/tests/test_trace_writer.py:14, kept identical across quadrants.
 ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
+
+
+@dataclass(frozen=True, slots=True)
+class _DemoSessionContext:
+    """Demo-only `SessionContext` double (Day 8) — this CLI has no real
+    authenticated session, so it stands in for one, resolved locally rather
+    than read from `build_demo_recipe()`'s recipe (that would defeat the
+    point: session identity must never come from the recipe)."""
+
+    tenant_id: UUID
+    user: str
+    roles: list[str]
 
 
 class _NoOpTraceWriter:
@@ -79,6 +92,7 @@ def build_demo_recipe() -> Recipe:
 async def _demo() -> None:
     result = await interpreter.run(
         build_demo_recipe(),
+        session_context=_DemoSessionContext(tenant_id=ANKOR_ID, user="demo-user", roles=[]),
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),
