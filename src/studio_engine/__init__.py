@@ -18,6 +18,7 @@ from studio_engine.executors import (
 )
 from studio_engine.interpreter import RunResult, run
 from studio_engine.registry import REGISTRY, get_executor_class
+from studio_engine.session import SessionContext
 
 __all__ = [
     "REGISTRY",
@@ -28,6 +29,7 @@ __all__ = [
     "LlmStepExecutor",
     "NodeExecutor",
     "RunResult",
+    "SessionContext",
     "ToolCallExecutor",
     "get_executor_class",
     "run",

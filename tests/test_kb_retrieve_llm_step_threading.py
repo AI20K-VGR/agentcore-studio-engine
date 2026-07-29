@@ -40,6 +40,7 @@ from studio_contracts import (
 )
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding
+from test_session_context_tenant_wall import default_session_context
 
 _TOOL_NAME = "search_docs"
 _REAL_CHUNK_ID = "chunk-042"
@@ -177,6 +178,7 @@ def _four_node_recipe() -> Recipe:
 async def _run(kb_search: object, llm: object) -> interpreter.RunResult:
     return await interpreter.run(
         _four_node_recipe(),
+        session_context=default_session_context(),
         kb_search=kb_search,  # type: ignore[arg-type]
         llm=llm,  # type: ignore[arg-type]
         embedding=EmptyEmbedding(),

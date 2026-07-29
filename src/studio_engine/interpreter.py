@@ -56,6 +56,7 @@ from studio_engine.executors import (
     NodeExecutor,
     ToolCallExecutor,
 )
+from studio_engine.session import SessionContext
 
 # Day 5 (out of scope for cost-lineage — obs.costs stays a schema-shell until
 # DE builds real cost aggregation): every TraceEvent this phase emits carries
@@ -109,6 +110,7 @@ class RunResult:
 async def run(
     recipe: Recipe,
     *,
+    session_context: SessionContext,
     kb_search: KbSearch,
     llm: LLM,
     embedding: EmbeddingService,
@@ -116,6 +118,19 @@ async def run(
 ) -> RunResult:
     """Walk `recipe.dag` from its single start node, following `dag.edges`
     node-by-node, until an `end` node executes.
+
+    `session_context` (Day 8, INV-1 Tenant-Wall) is server-resolved caller
+    identity — mandatory, keyword-only, NO default, so no call site can
+    silently skip the fence. Every tenant identity this function emits (the
+    `kb-retrieve` node's injected `tenant_id` param, and every `TraceEvent`'s
+    `tenant_id`) comes from `session_context.tenant_id`, NEVER from the
+    recipe's own client-declared tenant field — a mismatch (client declares
+    one tenant, session resolves to another) is not an error, it is simply
+    ignored: the run proceeds scoped to the session's tenant. That recipe
+    field is client-supplied data (`studio_contracts.recipe.Recipe`, built by
+    workbench/client) and this function does not read it anywhere; see
+    `studio_engine.session` for why that is the actual fence, not merely a
+    convention.
 
     Constructs all 6 executors explicitly (constructor-DI, plan decision
     #2 — NOT a generic factory): `KbRetrieveExecutor(kb_search)`,
@@ -208,15 +223,18 @@ async def run(
         node = nodes_by_id[current_id]
         node_type = node.type
         if node_type is NodeType.KB_RETRIEVE:
-            # Thread the recipe's own tenant identity down into the
-            # `kb-retrieve` executor (same inject-into-params pattern used for
-            # `retrieved_chunks` below). The workbench recipe only puts a tenant
-            # SLUG into `node.params`, never the UUID, so without this the
-            # executor falls back to its nil-UUID sentinel and `KbSearch.search`
-            # runs against `UUID(int=0)` → 0 chunks. `recipe.tenant_id` is a
-            # real `UUID` object (recipe.py:89), which is exactly what
+            # Thread the SESSION's tenant identity (Day 8, INV-1) down into
+            # the `kb-retrieve` executor (same inject-into-params pattern used
+            # for `retrieved_chunks` below) — never the recipe's own tenant
+            # field, which is client-declared and exactly the value INV-1
+            # must not trust.
+            # The workbench recipe only puts a tenant SLUG into `node.params`,
+            # never the UUID, so without this the executor falls back to its
+            # nil-UUID sentinel and `KbSearch.search` runs against
+            # `UUID(int=0)` → 0 chunks. `session_context.tenant_id` is a real
+            # `UUID` (see `studio_engine.session`), which is exactly what
             # `KbRetrieveExecutor` `isinstance(..., UUID)`-checks for.
-            node = node.model_copy(update={"params": {**node.params, "tenant_id": recipe.tenant_id}})
+            node = node.model_copy(update={"params": {**node.params, "tenant_id": session_context.tenant_id}})
         if node_type is NodeType.LLM_STEP:
             node = node.model_copy(
                 update={
@@ -268,7 +286,7 @@ async def run(
             event_id=str(uuid.uuid4()),
             run_id=run_id,
             agent_id=recipe.agent_id,
-            tenant_id=recipe.tenant_id,
+            tenant_id=session_context.tenant_id,
             node_id=node.id,
             node_type=node_type,
             ts=now.isoformat(timespec="microseconds"),
