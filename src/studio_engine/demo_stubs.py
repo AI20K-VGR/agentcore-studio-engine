@@ -20,7 +20,82 @@ from uuid import UUID
 
 from studio_contracts import KbSearchResultItem
 
-_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "llm_step"
+_ENGINE_ROOT = Path(__file__).resolve().parents[2]
+_FIXTURES_DIR = _ENGINE_ROOT / "tests" / "fixtures" / "llm_step"
+
+
+class FixtureError(RuntimeError):
+    """A VCR fixture could not be replayed — missing file, unparseable JSON,
+    missing `response` key, or a `response` of the wrong type (Day 9 harden,
+    spec AIE-1, issue #42).
+
+    ONE type for all four because they do not share a builtin base: before
+    this, the four failed as `FileNotFoundError` / `json.JSONDecodeError` /
+    `KeyError` / (for `StubEmbedding`) `ZeroDivisionError`, so no caller could
+    catch "the fixture is broken" as a single condition, and two of the four
+    said nothing about fixtures at all. Every message names the fixture family,
+    the `case_id`, and the repo-relative path.
+
+    Fail-closed, never fall back: CI replays recorded fixtures only (INV-4
+    fixtures-first — no live model call is permitted), so a missing recording
+    means the run cannot produce a real answer. Substituting a placeholder here
+    would make an unreplayable case look like a normal (and deterministic!)
+    run to `interpreter.run()`, to the trace, and therefore to evalhub's
+    scorecard.
+    """
+
+
+def _rel(path: Path) -> str:
+    """`path` relative to the engine package root, POSIX-style — the form that
+    goes into a `FixtureError` message.
+
+    Repo-relative, not absolute: the pre-Day-9 `FileNotFoundError` printed the
+    whole host path (`C:\\Users\\<name>\\...\\tests\\fixtures\\llm_step\\x.json`),
+    which both leaked a local directory layout into shared CI logs and made the
+    message differ per machine (so no test could assert on it). Falls back to
+    the bare filename when `path` lies outside the package — that happens only
+    when a caller (or a test) has redirected the fixtures dir elsewhere, and
+    the `case_id` in the message already identifies the recording.
+    """
+    try:
+        return path.resolve().relative_to(_ENGINE_ROOT).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _load_fixture(kind: str, fixtures_dir: Path, case_id: str) -> dict[str, object]:
+    """Read + parse `<fixtures_dir>/<case_id>.json` and guarantee a `response`
+    key exists. Shared by both replay stubs so the two fixture families
+    (`llm_step`, `embedding`) cannot drift apart on failure behavior — the
+    caller only has to type-check `response` for its own protocol.
+
+    `raise ... from exc` throughout: the underlying OSError/JSONDecodeError
+    stays on the chain, so wrapping adds context without hiding the cause.
+    """
+    fixture_path = fixtures_dir / f"{case_id}.json"
+    try:
+        raw = fixture_path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise FixtureError(
+            f"{kind} fixture {case_id!r} not found — expected {_rel(fixture_path)}. "
+            "CI replays recorded fixtures only (INV-4 fixtures-first, no live model call), so a "
+            'missing recording is a hard failure with no fallback; record it per README.md "Fixture format".'
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise FixtureError(f"{kind} fixture {case_id!r} at {_rel(fixture_path)} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise FixtureError(
+            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} must be a JSON object, "
+            f"got {type(data).__name__!r}."
+        )
+    if "response" not in data:
+        raise FixtureError(
+            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} has no 'response' key — that key holds "
+            'the recorded return value being replayed; see README.md "Fixture format".'
+        )
+    return data
 
 
 class EmptyKbSearch:
@@ -46,6 +121,9 @@ class FixtureLLM:
     see `packages/engine/README.md` "Fixture format"). The fixtures dir is
     resolved relative to `Path(__file__)` (not cwd) so this works identically
     from pytest and a CLI invocation.
+
+    Day 9 harden: an unreplayable fixture raises `FixtureError` (see
+    `_load_fixture`) instead of a bare `FileNotFoundError`/`KeyError`.
     """
 
     def __init__(self, case_id: str) -> None:
@@ -53,9 +131,20 @@ class FixtureLLM:
 
     async def complete(self, prompt: str, **kwargs: object) -> str:
         del prompt, kwargs
-        fixture_path = _FIXTURES_DIR / f"{self._case_id}.json"
-        data = json.loads(fixture_path.read_text(encoding="utf-8"))
-        return str(data["response"])
+        data = _load_fixture("llm_step", _FIXTURES_DIR, self._case_id)
+        response = data["response"]
+        if not isinstance(response, str):
+            # Was `str(data["response"])` before Day 9 — that COERCED a
+            # wrong-typed recording (a dict came back as the literal text
+            # "{'a': 1}") and the run continued, handing that string
+            # downstream as a real LLM answer. `LLM.complete` is typed
+            # `-> str`; a non-string recording is a broken recording.
+            raise FixtureError(
+                f"llm_step fixture {self._case_id!r} has a non-string 'response' "
+                f"(got {type(response).__name__!r}) — `LLM.complete` is typed `-> str`, and "
+                "stringifying a wrong-shaped recording would pass garbage downstream as a real answer."
+            )
+        return response
 
 
 class EmptyEmbedding:
@@ -68,7 +157,7 @@ class EmptyEmbedding:
         return []
 
 
-_EMBED_FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "embedding"
+_EMBED_FIXTURES_DIR = _ENGINE_ROOT / "tests" / "fixtures" / "embedding"
 
 
 class StubEmbedding:
@@ -86,15 +175,28 @@ class StubEmbedding:
     invariant, not imported — `.importlinter` forbids `studio_engine`
     importing `studio_kb`); re-pin both constants together if that width
     ever changes.
+
+    Day 9 harden: an unreplayable fixture raises `FixtureError` (see
+    `_load_fixture`), same contract as `FixtureLLM` above.
     """
 
     def __init__(self, case_id: str) -> None:
         self._case_id = case_id
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        fixture_path = _EMBED_FIXTURES_DIR / f"{self._case_id}.json"
-        data = json.loads(fixture_path.read_text(encoding="utf-8"))
+        data = _load_fixture("embedding", _EMBED_FIXTURES_DIR, self._case_id)
         vectors = data["response"]
+        if not isinstance(vectors, list) or not vectors:
+            # The `not vectors` half is why this guard exists: an empty list
+            # reached `i % len(vectors)` below and died with a bare
+            # `ZeroDivisionError` — an error with no visible connection to
+            # fixtures, so whoever read the traceback started debugging
+            # arithmetic instead of the recording.
+            raise FixtureError(
+                f"embedding fixture {self._case_id!r} needs a non-empty JSON list of vectors in "
+                f"'response' (got {type(vectors).__name__!r}) — `embed()` cycles through them to "
+                "return 1 vector per input text, which is impossible with none recorded."
+            )
         return [list(vectors[i % len(vectors)]) for i in range(len(texts))]
 
 
