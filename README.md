@@ -79,6 +79,30 @@ ghi để luôn trả đúng `len(texts)` vector (giữ invariant "1 vector / 1 
 
 **100% synthetic** (luật NDA) — như trên.
 
+## Hợp đồng lỗi khi fixture thiếu/méo (Day 9, issue #42)
+
+Áp dụng cho **cả 2** nhánh replay ở trên (`FixtureLLM`, `StubEmbedding`). Fixture không replay được
+raise `studio_engine.demo_stubs.FixtureError` — **một** type duy nhất cho cả 4 dạng hỏng:
+
+| Dạng hỏng | Trước Day 9 | Từ Day 9 |
+|---|---|---|
+| File không tồn tại | `FileNotFoundError` với **absolute path** máy local | `FixtureError` nêu `case_id` + path **repo-relative** |
+| JSON không parse được | `json.JSONDecodeError` không kèm tên file | `FixtureError` nêu file + lý do parse |
+| Thiếu key `response` | `KeyError: 'response'` trần | `FixtureError` nêu file + key thiếu |
+| `response` sai kiểu | **nuốt lỗi**: `str()` coerce dict thành `"{'a': 1}"` rồi chạy tiếp / `[]` vector → `ZeroDivisionError` | `FixtureError` nêu kiểu nhận được |
+
+Vì sao gộp 1 type: 4 dạng trên không chung họ builtin nào, nên trước đây caller không thể bắt
+"fixture hỏng" bằng một `except`, và 2 trong 4 dạng không hề nhắc tới fixture trong thông báo.
+
+**Fail-closed, không fallback.** CI chỉ chạy bằng bản ghi có sẵn (INV-4 fixtures-first, cấm gọi
+model thật), nên fixture thiếu = không thể tạo ra câu trả lời thật. Nếu thay bằng giá trị giữ chỗ,
+một case không replay được sẽ trông y hệt một run bình thường (và *tất định*!) với
+`interpreter.run()`, với trace, và do đó với scorecard của evalhub.
+
+`interpreter.run()` **không bắt** lỗi này ở đâu cả — nó nổi thẳng lên caller, và trace chỉ có event
+của các node đã chạy xong trước đó (không có event `end`), nên một run gãy không thể bị nhầm là run
+hoàn tất. Ghim ở `tests/test_fixture_missing_fails_loud.py`.
+
 ## CLI demo (Day 3)
 
 `python -m studio_engine` chạy 1 recipe synthetic 4-node (`kb-retrieve → llm-step → tool-call →
