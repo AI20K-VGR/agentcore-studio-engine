@@ -87,8 +87,7 @@ def _load_fixture(kind: str, fixtures_dir: Path, case_id: str) -> dict[str, obje
         raise FixtureError(f"{kind} fixture {case_id!r} at {_rel(fixture_path)} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise FixtureError(
-            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} must be a JSON object, "
-            f"got {type(data).__name__!r}."
+            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} must be a JSON object, got {type(data).__name__!r}."
         )
     if "response" not in data:
         raise FixtureError(
