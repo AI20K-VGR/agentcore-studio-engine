@@ -292,7 +292,16 @@ async def run(
             raw_outputs = dict(output) if isinstance(output, dict) else {}
             raw_tokens = raw_outputs.get("tokens")
             tokens = raw_tokens if isinstance(raw_tokens, Tokens) else Tokens(prompt=0, completion=0)
-            raw_citations = raw_outputs.get("citations")
+            # C-1 (`docs/contracts/trace-citations.v0.md`): CHỈ `llm-step` được mang
+            # `citations`. Cổng theo `node_type`, không theo hình dạng output — trước
+            # D11 chỗ này nhấc `citations` từ output của **bất kỳ** node trả dict, nên
+            # "chỉ llm-step" là hành vi tình cờ đúng chứ không phải bảo đảm: riêng
+            # `ToolCallExecutor` trả thẳng dict của `ToolDispatch.dispatch()` — một seam
+            # NGOÀI — nên một tool đặt key "citations" là đi thẳng vào trace như trích
+            # dẫn thật, và `citation_accuracy` (evalhub) ăn điểm giả.
+            # Không raise, không mất dữ liệu: key vẫn nằm nguyên trong `outputs` bên
+            # dưới nên vẫn truy được, chỉ không được nhận là trích dẫn có căn cứ.
+            raw_citations = raw_outputs.get("citations") if node_type is NodeType.LLM_STEP else None
             citations = raw_citations if isinstance(raw_citations, list) else None
             # JSON-safe outputs (F15's PgTraceWriter serializes via Jsonb):
             # a raw Tokens pydantic object can't go through json.dumps as-is.
