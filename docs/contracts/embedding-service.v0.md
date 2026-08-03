@@ -70,13 +70,24 @@ thứ vỡ im lặng.
 |---|---|---|
 | **E-1** | **Cardinality theo vị trí** — `len(kết quả) == len(texts)`, vector thứ `i` thuộc `texts[i]`. | Người tiêu thụ ghép bằng `zip(texts, vectors)`; `zip` **cắt cụt im lặng**, không ném lỗi. Trả thiếu vector = một phần corpus lặng lẽ không được index, và không có dòng log nào nói ra. |
 | **E-2** | **Bề rộng đồng nhất** — mọi vector cùng độ dài, và độ dài đó **bằng `EMBEDDING_DIM`** (`packages/kb/src/studio_kb/schema.py:33`, hiện `8`). | `kb.chunks.embedding` khai `vector(EMBEDDING_DIM)` + index HNSW cosine. Lệch chiều thì vỡ sâu trong pgvector lúc `index` (`postgres.py:137-140`), xa chỗ gây lỗi. |
-| **E-3** | **Tất định trong một lần chạy** — cùng đầu vào ra cùng vector; CI **không gọi mạng/model** (INV-4 fixtures-first). | Embedding nhấp nháy làm mọi test determinism (`test_interpreter_determinism.py`) đỏ ngẫu nhiên, và điểm smoke-eval hết tái lập. |
+| **E-3** | **Tất định qua các lần chạy VÀ qua các tiến trình** — cùng đầu vào ra cùng vector, **kể cả ở hai tiến trình Python khác nhau với `PYTHONHASHSEED` khác nhau**; CI **không gọi mạng/model** (INV-4 fixtures-first). | Embedding nhấp nháy làm mọi test determinism (`test_interpreter_determinism.py`) đỏ ngẫu nhiên, và điểm smoke-eval hết tái lập. |
 
 **E-2 là bất biến LIÊN-PACKAGE nhưng KHÔNG import được.** `.importlinter` cấm `studio_engine` chạm
 `studio_kb`, nên `StubEmbedding` đang **khoá cứng số 8** (`demo_stubs.py:173-176` ghi rõ lý do). Đây
 là nợ có ý thức, không phải sơ suất: hai hằng số ở hai package phải **đổi cùng lúc bằng tay**. Ai đổi
 `EMBEDDING_DIM` mà quên bên engine thì `test_embedding_service_contract.py` đỏ ở một dòng assert, chứ
 không vỡ trong pgvector.
+
+**E-3 phải nói "qua tiến trình", không chỉ "trong một lần chạy" — và đây là chỗ bản đầu viết hụt.**
+Bên tiêu thụ đang đòi mạnh hơn một bậc: `evalhub/tests/test_determinism.py::test_bang_diem_bat_bien_qua_pythonhashseed`
+chạy đường chấm điểm trong **hai tiến trình** với `PYTHONHASHSEED=1` vs `424242` rồi assert cùng một
+hash bảng điểm. Một impl seed theo `PYTHONHASHSEED` / `id()` / thứ tự iterate một `set` **thoả E-3 bản
+cũ nguyên văn** mà vẫn làm bài đó đỏ — tức bảo đảm **đọc thì mạnh hơn thứ nó ràng buộc**, đúng loại
+lỗi §5 vạch ra bằng null control. Siết trước khi đóng băng vì siết sau cần mini-RFC + 4/4 chữ ký.
+
+Bản mạnh **không siết thêm gì lên impl đang có** — đã đo, không suy: `StubEmbedding` replay từ fixture
+JSON và `derive_vector` băm blake2b, cả hai đều không đụng hash randomize, nên ba tiến trình khác seed
+ra cùng một payload. Nó chỉ chặn đúng loại provider gateway sẽ vi phạm về sau.
 
 ## 3. Hai impl (R-SPEC A1#5) — trạng thái thật
 
