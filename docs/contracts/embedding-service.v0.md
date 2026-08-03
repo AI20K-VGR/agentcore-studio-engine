@@ -21,7 +21,9 @@ date: 2026-08-03
 
 **✅ Đã khoá bằng câu chữ (D11, AIE-1):**
 - **§2 ba bất biến tiêu thụ** — cardinality theo vị trí · bề rộng đồng nhất khớp `EMBEDDING_DIM` ·
-  tất định trong một lần chạy. Ghim bằng test: `tests/test_embedding_service_contract.py`.
+  **tất định qua các lần chạy VÀ qua các tiến trình** (`PYTHONHASHSEED` khác nhau). Ghim bằng test:
+  `tests/test_embedding_service_contract.py` (9 bài). E-3 được **siết** so với bản sáng 03/08 — xem
+  changelog và `docs/decisions/decision-log.md` DL-11.A1-9.
 - **§3 hai impl** — `StubEmbedding` (CI, fixture-replay) là impl **duy nhất tuân thủ đủ** hôm nay;
   gateway là impl thứ hai, chưa về, và **không được đổi Protocol** khi về (INV-4).
 - **§4 non-conformance đã biết** — `EmptyEmbedding` **vi phạm** cardinality; phạm vi dùng hợp lệ bị
@@ -154,4 +156,5 @@ Chữ ký `kb.search(query, tenant_id: UUID, section_roles, top_k)` (DE giữ b�
 
 | Bản | Ngày | Nội dung |
 |---|---|---|
+| **freeze-ready.2** | 2026-08-03 (D11, review @dholmes0207) | **Siết E-3**: *"tất định trong một lần chạy"* → *"tất định qua các lần chạy VÀ qua các tiến trình"*. Không phải làm rõ câu chữ mà là **mạnh thêm một bậc**: bản cũ cho phép một impl seed theo `PYTHONHASHSEED`/`id()`/thứ tự `set` — thoả nguyên văn nhưng vẫn làm `evalhub::test_bang_diem_bat_bien_qua_pythonhashseed` đỏ. Thêm bài khoá `subprocess` 3 seed (8→**9 bài**). Đo trước khi siết: mọi impl đang có đã thoả sẵn ⇒ **không** ai phải sửa code. Siết TRƯỚC freeze vì sau freeze là mini-RFC + 4/4 ký. Xem DL-11.A1-9. |
 | **freeze-ready** | 2026-08-03 (D11, #81) | Bản đầu. **Không đổi chữ ký** (`protocols.py:17` giữ nguyên) — khoá **bất biến tiêu thụ** E-1/E-2/E-3 + ghim bằng `tests/test_embedding_service_contract.py`; ghi non-conformance `EmptyEmbedding` (§4) và thu hẹp phạm vi dùng bằng câu chữ; để **mở giá trị `dim`** có lý do đo được (§5); xác nhận tiêu thụ `kb.search` (§6). `FROZEN` + 4/4 chữ ký **chưa đóng** — chờ ceremony + A1-1 |
