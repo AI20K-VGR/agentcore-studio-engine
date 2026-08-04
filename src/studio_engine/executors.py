@@ -66,11 +66,7 @@ def build_prompt(query: str, chunks: list[KbSearchResultItem], instructions: str
     defaults to `""` so every pre-Day-7 2-arg call site keeps its exact prior
     output; when given, it is prepended ahead of the fixed `_PROMPT_HEADER`.
     """
-    excerpts = (
-        "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in chunks)
-        if chunks
-        else _NO_EXCERPT
-    )
+    excerpts = "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in chunks) if chunks else _NO_EXCERPT
     header = f"{instructions}\n\n{_PROMPT_HEADER}" if instructions else _PROMPT_HEADER
     return f"{header}\n\n{excerpts}\n\nCâu hỏi: {query}"
 

@@ -114,7 +114,7 @@ def _write_embedding_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ca
 
 
 async def test_missing_llm_fixture_names_case_id_and_relative_path() -> None:
-    """"Fail rõ" is concrete, not a vibe: the message must carry the case_id
+    """ "Fail rõ" is concrete, not a vibe: the message must carry the case_id
     the caller asked for AND the repo-relative path where the recording was
     expected. Without the case_id, a CI log tells you a file is missing but not
     which replay wanted it."""
@@ -152,7 +152,7 @@ async def test_real_case_id_still_replays() -> None:
 
 
 async def test_interpreter_does_not_swallow_a_missing_fixture() -> None:
-    """"Không nuốt lỗi" at the INTERPRETER layer, which is the level that
+    """ "Không nuốt lỗi" at the INTERPRETER layer, which is the level that
     matters: `run()` has no `try/except` anywhere, so a fixture error must
     surface to the caller unchanged and no `RunResult` may come back.
 

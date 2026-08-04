@@ -17,11 +17,23 @@ supports a finite single-successor chain and refuses anything else with a
 3. no node is visited twice (no reachable cycle) — the walk's `visited` set
 4. the chain terminates ON an `end` node, not merely by running out of edges
 
-(3) and (4) cannot be delegated upstream: `graph_lint` (spec SWE) is the
-intended validator, but it is an unimplemented stub and its 4 specified
-rules cover neither a lasso cycle nor "an `end` node must be reachable".
-Without (3) a graph like `a -> b -> b` passes (1) and (2) and would spin
-forever, growing `events` and calling `trace_writer.write` without bound.
+None of the four may be delegated upstream, for a reason that does not
+depend on how far along `graph_lint` (spec SWE) happens to be: `run()`
+never CALLS it. Nothing in this module can observe whether a recipe was
+linted, so treating any of these as somebody else's job would mean trusting
+a check this code cannot see. Rule (4) additionally has no upstream twin at
+all — graph_lint's 4 rules say nothing about an `end` node being reachable
+or terminal. Without (3) a graph like `a -> b -> b` passes (1) and (2) and
+would spin forever, growing `events` and calling `trace_writer.write`
+without bound.
+
+(Do NOT re-state graph_lint's implementation status here. An earlier cut of
+this docstring claimed its "4 specified rules cover neither a lasso cycle
+nor an `end` node" — the lasso half was already false when written: rule 2
+"no forbidden cycle" has been in the spec since the stub, and workbench#12
+implements it as a 3-color DFS that does reject `a -> b -> b`. The `visited`
+set below is defense-in-depth, which is a claim about THIS module and stays
+true either way.)
 """
 
 from __future__ import annotations
@@ -165,13 +177,20 @@ async def run(
     phase — no real cost model exists yet (`obs.costs` is a schema-shell,
     DE's later work).
 
-    No graph-lint validation seam is wired in yet (workbench's `graph_lint`,
-    spec SWE) — a recipe that hasn't passed validation is not this phase's
-    problem to defend against beyond the 4 structural preconditions listed in
-    the module docstring, each of which raises `ValueError`. Note those
-    preconditions are STRICTER than graph_lint's 4 specified rules, so a
-    recipe can pass publish-time lint and still be rejected here; reconciling
-    the two contracts is open work, not something this module can do alone.
+    No graph-lint validation seam is wired in here (workbench's `graph_lint`,
+    spec SWE) and none is planned: lint runs at PUBLISH time, `run()` at
+    execute time, and a recipe can reach an interpreter without having gone
+    through this deployment's publish path at all. So `run()` defends itself
+    with the 4 structural preconditions listed in the module docstring, each
+    raising `ValueError`.
+
+    Those preconditions are STRICTER than graph_lint's 4 rules — precondition
+    (2) (≤ 1 outgoing edge) and (4) (must terminate ON an `end` node) have no
+    upstream twin, because `condition` branching is still unevaluated here.
+    A recipe can therefore pass publish-time lint and still be rejected at
+    run time. That gap is intentional for now, but it is a REAL divergence
+    between two published contracts, and closing it is cross-lane work
+    (AIE-1 + SWE), not something this module decides alone.
     """
     executors: dict[NodeType, NodeExecutor] = {
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
@@ -209,8 +228,9 @@ async def run(
     # has an incoming edge, and `_build_next_map` only rejects out-degree > 1.
     # A "lasso" (`a -> b -> b`, or `a -> b -> c -> b`) passes both and would
     # spin forever here — unbounded `events` growth AND unbounded
-    # `trace_writer.write` calls. graph_lint's no-cycle rule (spec SWE) is
-    # still an unimplemented stub, so this loop is the only line of defence.
+    # `trace_writer.write` calls. graph_lint's no-cycle rule (spec SWE) also
+    # rejects lassos, but this guard is not redundant: `run()` never calls
+    # graph_lint, so an unlinted recipe reaching here would hit nothing else.
     visited: set[str] = set()
     current_id: str = _find_start_node_id(recipe.dag)
     while True:
@@ -272,7 +292,16 @@ async def run(
             raw_outputs = dict(output) if isinstance(output, dict) else {}
             raw_tokens = raw_outputs.get("tokens")
             tokens = raw_tokens if isinstance(raw_tokens, Tokens) else Tokens(prompt=0, completion=0)
-            raw_citations = raw_outputs.get("citations")
+            # C-1 (`docs/contracts/trace-citations.v0.md`): CHỈ `llm-step` được mang
+            # `citations`. Cổng theo `node_type`, không theo hình dạng output — trước
+            # D11 chỗ này nhấc `citations` từ output của **bất kỳ** node trả dict, nên
+            # "chỉ llm-step" là hành vi tình cờ đúng chứ không phải bảo đảm: riêng
+            # `ToolCallExecutor` trả thẳng dict của `ToolDispatch.dispatch()` — một seam
+            # NGOÀI — nên một tool đặt key "citations" là đi thẳng vào trace như trích
+            # dẫn thật, và `citation_accuracy` (evalhub) ăn điểm giả.
+            # Không raise, không mất dữ liệu: key vẫn nằm nguyên trong `outputs` bên
+            # dưới nên vẫn truy được, chỉ không được nhận là trích dẫn có căn cứ.
+            raw_citations = raw_outputs.get("citations") if node_type is NodeType.LLM_STEP else None
             citations = raw_citations if isinstance(raw_citations, list) else None
             # JSON-safe outputs (F15's PgTraceWriter serializes via Jsonb):
             # a raw Tokens pydantic object can't go through json.dumps as-is.

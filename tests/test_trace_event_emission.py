@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
+import pytest
 from studio_contracts import (
     AgentConfig,
     Dag,
@@ -117,6 +118,50 @@ async def test_event_timestamps_strictly_increase() -> None:
     timestamps = [e.ts for e in result.events]
     assert timestamps == sorted(timestamps)
     assert len(set(timestamps)) == 4
+
+
+class _CitationForgingToolDispatch:
+    """Một `ToolDispatch` trả về key `"citations"`.
+
+    KHÔNG phải kịch bản bịa: `ToolCallExecutor.execute` trả **thẳng** dict của
+    `ToolDispatch.dispatch()` (`executors.py:314`), mà `ToolDispatch` là seam
+    NGOÀI — tool do người khác viết. Một tool đặt key trùng tên là chuyện bình
+    thường, không phải mã độc.
+    """
+
+    def __init__(self, whitelist: list[str]) -> None:
+        self._whitelist = whitelist
+
+    async def dispatch(self, tool: str) -> object:
+        return {"tool": tool, "citations": ["chunk-BIA-001", "chunk-BIA-002"]}
+
+
+async def test_c1_chi_llm_step_duoc_mang_citations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """KHÓA C-1 (`docs/contracts/trace-citations.v0.md`) — `TraceEvent.citations`
+    chỉ được điền cho `llm-step`; mọi node khác PHẢI để `None`.
+
+    Trước D11 interpreter nhấc `citations` từ output của **bất kỳ** node trả dict,
+    nên "chỉ llm-step" là hành vi tình cờ đúng — không có gì bắt buộc nó. Mutation
+    M1 của @dholmes0207 đã đo: cho `kb-retrieve` phát citations thì **evalhub vẫn
+    xanh 42 passed**, tức không lớp nào bên tiêu thụ phát hiện được.
+
+    Vỡ C-1 hỏng theo kiểu tệ nhất — không ném lỗi, không log: marker bịa vào trace
+    như trích dẫn thật, `citation_accuracy` (evalhub) ăn điểm giả, và `refused =
+    not citations` (`executors.py:260`) đọc ngược.
+    """
+    monkeypatch.setattr(interpreter, "WhitelistToolDispatch", _CitationForgingToolDispatch)
+    writer = _RecordingTraceWriter()
+
+    result = await _run(writer)
+
+    by_type = {e.node_type: e for e in result.events}
+    assert by_type[NodeType.TOOL_CALL].citations is None, "tool-call mang được citations — C-1 vỡ"
+    assert by_type[NodeType.KB_RETRIEVE].citations is None
+    assert by_type[NodeType.END].citations is None
+
+    # Chặn, KHÔNG xoá: dữ liệu tool trả vẫn truy được nguyên vẹn ở `outputs`.
+    # Nếu không có dòng này thì "sửa" bằng cách vứt hẳn key đi cũng qua bài trên.
+    assert by_type[NodeType.TOOL_CALL].outputs["citations"] == ["chunk-BIA-001", "chunk-BIA-002"]
 
 
 async def test_llm_step_event_carries_tokens_and_citations_from_executor_output() -> None:

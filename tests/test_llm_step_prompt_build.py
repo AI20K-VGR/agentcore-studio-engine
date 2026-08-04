@@ -45,9 +45,7 @@ ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 def _chunk(chunk_id: str, text: str) -> KbSearchResultItem:
-    return KbSearchResultItem(
-        chunk_id=chunk_id, text=text, score=0.9, tenant_id=ANKOR_ID, section_role="public"
-    )
+    return KbSearchResultItem(chunk_id=chunk_id, text=text, score=0.9, tenant_id=ANKOR_ID, section_role="public")
 
 
 class _RecordingLLM:
@@ -220,8 +218,7 @@ def test_build_prompt_without_instructions_starts_with_the_fixed_header() -> Non
     prompt = build_prompt("q", [_chunk("ankor-leave-001#c1", "x")])
 
     assert prompt.startswith(
-        "Bạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
-        "và trích dẫn chunk_id trong ngoặc vuông.\n"
+        "Bạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, và trích dẫn chunk_id trong ngoặc vuông.\n"
     )
 
 
@@ -233,8 +230,7 @@ def test_build_prompt_with_instructions_prefixes_before_the_fixed_header() -> No
     prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
 
     assert prompt.startswith(
-        "Bạn là trợ lý HR của tenant ankor.\n\n"
-        "Bạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
+        "Bạn là trợ lý HR của tenant ankor.\n\nBạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
     )
 
 

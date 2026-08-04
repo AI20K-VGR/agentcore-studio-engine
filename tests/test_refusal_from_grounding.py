@@ -61,9 +61,7 @@ ANKOR_ID = UUID("a0000000-0000-0000-0000-000000000001")
 
 
 def _chunk(chunk_id: str, text: str = "nội dung", tenant_id: UUID = ANKOR_ID) -> KbSearchResultItem:
-    return KbSearchResultItem(
-        chunk_id=chunk_id, text=text, score=0.9, tenant_id=tenant_id, section_role="public"
-    )
+    return KbSearchResultItem(chunk_id=chunk_id, text=text, score=0.9, tenant_id=tenant_id, section_role="public")
 
 
 class _ReplayLLM:
@@ -90,9 +88,7 @@ async def _llm_output(answer: str, chunks: list[KbSearchResultItem]) -> dict[str
 async def test_refused_false_when_answer_cites_a_retrieved_chunk() -> None:
     """The answerable path (SC-01/02/03): the answer grounds a real chunk, so
     the agent did not refuse."""
-    out = await _llm_output(
-        "Báo trước 3 ngày làm việc. [ankor-leave-001#c1]", [_chunk("ankor-leave-001#c1")]
-    )
+    out = await _llm_output("Báo trước 3 ngày làm việc. [ankor-leave-001#c1]", [_chunk("ankor-leave-001#c1")])
 
     assert out["citations"] == ["ankor-leave-001#c1"]
     assert out["refused"] is False
@@ -137,9 +133,7 @@ async def test_refused_true_when_bracket_names_a_chunk_from_another_tenant() -> 
     """Cross-tenant leak attempt: the model brackets a Borea id that retrieval
     never returned. It is not in `retrieved_chunks`, so it is not a citation —
     and `no_leak` on the evalhub side therefore has nothing to fail on."""
-    out = await _llm_output(
-        "Theo tài liệu Borea. [borea-expense-001#c1]", [_chunk("ankor-leave-001#c1")]
-    )
+    out = await _llm_output("Theo tài liệu Borea. [borea-expense-001#c1]", [_chunk("ankor-leave-001#c1")])
 
     assert out["citations"] == []
     assert out["refused"] is True
