@@ -145,36 +145,47 @@ async def test_walk_follows_edge_order_not_node_declaration_order() -> None:
     assert list(result.final_state.keys()) == ["n_kb", "n_llm", "n_tool", "n_end"]
 
 
-async def test_zero_start_candidates_raises_value_error() -> None:
+async def test_zero_start_candidates_raises_index_error_not_value_error() -> None:
     """A 2-node cycle (`a->b->a`) — every node has an incoming edge, so
-    there is no valid entry point. Must raise, not silently pick one."""
+    `_find_start_node_id`'s `starts` list is empty. DEC-A (decision-log,
+    packages/engine/docs/decisions/decision-log.md) dropped the explicit
+    "exactly 1 start node" `ValueError` guard; `starts[0]` on an empty list
+    now raises `IndexError` naturally — a loud crash from an unguarded index,
+    not the old descriptive `ValueError` message, and NOT a silent fallback
+    to some other node."""
     nodes = [
         Node(id="n_a", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_b", type=NodeType.END, params={}),
     ]
     edges = [Edge(from_="n_a", to="n_b"), Edge(from_="n_b", to="n_a")]
 
-    with pytest.raises(ValueError, match="exactly 1 start node"):
+    with pytest.raises(IndexError):
         await _run(_recipe(nodes, edges))
 
 
-async def test_multiple_start_candidates_raises_value_error() -> None:
+async def test_multiple_start_candidates_picks_first_node_in_dag_order() -> None:
     """2 disconnected nodes, no edges at all — both qualify as "no incoming
-    edge", an ambiguous choice the interpreter must refuse to guess."""
+    edge". DEC-A dropped the ambiguity guard; `_find_start_node_id` now
+    returns `starts[0]` unconditionally, and `starts` is built by iterating
+    `dag.nodes` in declared order — so the FIRST declared node (`n_a`) wins
+    as the (silent) start, and `n_b` is never reached by the walk at all."""
     nodes = [
         Node(id="n_a", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_b", type=NodeType.END, params={}),
     ]
 
-    with pytest.raises(ValueError, match="exactly 1 start node"):
-        await _run(_recipe(nodes, edges=[]))
+    result = await _run(_recipe(nodes, edges=[]))
+
+    assert list(result.final_state.keys()) == ["n_a"]
 
 
-async def test_branching_from_non_condition_node_raises_value_error() -> None:
-    """`n_kb` has 2 outgoing edges (`->n_llm` and `->n_tool`) — that is
-    `condition`-style branching, which `Edge.when` evaluation does not exist
-    for yet (`ConditionExecutor` is still `NotImplementedError`). The
-    interpreter must refuse to silently pick one arm."""
+async def test_branching_from_non_condition_node_follows_last_declared_edge() -> None:
+    """`n_kb` has 2 outgoing edges (`->n_llm` declared first, `->n_tool`
+    declared second). DEC-A dropped the ">1 outgoing edge" guard;
+    `_build_next_map` now does a plain dict assignment per edge in
+    declaration order, so the LAST-declared edge for a given `from_` wins
+    (last-write-wins, silent) — the walk follows `n_kb -> n_tool` and never
+    visits `n_llm`."""
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_llm", type=NodeType.LLM_STEP, params={}),
@@ -182,25 +193,29 @@ async def test_branching_from_non_condition_node_raises_value_error() -> None:
     ]
     edges = [Edge(from_="n_kb", to="n_llm"), Edge(from_="n_kb", to="n_tool")]
 
-    with pytest.raises(ValueError, match=">1 outgoing edge"):
-        await _run(_recipe(nodes, edges))
+    result = await _run(_recipe(nodes, edges))
+
+    assert list(result.final_state.keys()) == ["n_kb", "n_tool"]
 
 
-async def test_reachable_self_loop_raises_instead_of_walking_forever() -> None:
-    """A "lasso" — a tail leading into a self-loop — satisfies BOTH existing
-    structural checks: `n_kb` is the sole node with no incoming edge (1 start
-    candidate) and no node has >1 outgoing edge. Without a cycle guard the
-    walk revisits `n_tool` forever, growing `events` and calling
-    `trace_writer.write` without bound. The `_CountingTraceWriter` cap turns
-    that hang into a loud `AssertionError`, so this test distinguishes "raised
-    the right ValueError" from "hung and got capped"."""
+async def test_cycle_now_hangs_bounded_only_by_test_harness_cap() -> None:
+    """A "lasso" — a tail leading into a self-loop. DEC-A removed the
+    `visited`-set cycle guard ENTIRELY, with no replacement cap anywhere in
+    `interpreter.py` (decision-log DEC-A: the cap only ever exists in this
+    test file's `_CountingTraceWriter`, never in production code). The walk
+    now revisits `n_tool` forever, growing `events` and calling
+    `trace_writer.write` without bound. This test name says the quiet part
+    out loud: an unbounded hang is the ACCEPTED RISK (plan R1), not a
+    desired behavior — the only thing stopping this test itself from hanging
+    the suite is `_CountingTraceWriter`'s own cap, which raises
+    `AssertionError` after `cap` writes."""
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_tool", type=NodeType.TOOL_CALL, params={"tool": _TOOL_NAME}),
     ]
     edges = [Edge(from_="n_kb", to="n_tool"), Edge(from_="n_tool", to="n_tool")]
 
-    with pytest.raises(ValueError, match="cycle"):
+    with pytest.raises(AssertionError, match="walk did not terminate"):
         await interpreter.run(
             _recipe(nodes, edges),
             session_context=default_session_context(),
@@ -211,11 +226,13 @@ async def test_reachable_self_loop_raises_instead_of_walking_forever() -> None:
         )
 
 
-async def test_reachable_multi_node_cycle_raises_instead_of_walking_forever() -> None:
-    """The 3-node lasso `n_kb -> n_t1 -> n_t2 -> n_t1`. Same two structural
-    checks pass; only a `visited` set catches it. Separate from the self-loop
-    case because a guard implemented as "reject `edge.from_ == edge.to`" would
-    pass that test and still hang here."""
+async def test_multi_node_cycle_now_hangs_bounded_only_by_test_harness_cap() -> None:
+    """The 3-node lasso `n_kb -> n_t1 -> n_t2 -> n_t1`. Same as the
+    self-loop case above (DEC-A removed the `visited` guard with no
+    replacement), kept as a separate test because a guard implemented as
+    "reject `edge.from_ == edge.to`" would have passed the self-loop test
+    while still hanging here — this pins the general (not just
+    self-referential) cycle case."""
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_t1", type=NodeType.TOOL_CALL, params={"tool": _TOOL_NAME}),
@@ -227,7 +244,7 @@ async def test_reachable_multi_node_cycle_raises_instead_of_walking_forever() ->
         Edge(from_="n_t2", to="n_t1"),
     ]
 
-    with pytest.raises(ValueError, match="cycle"):
+    with pytest.raises(AssertionError, match="walk did not terminate"):
         await interpreter.run(
             _recipe(nodes, edges),
             session_context=default_session_context(),
@@ -238,12 +255,17 @@ async def test_reachable_multi_node_cycle_raises_instead_of_walking_forever() ->
         )
 
 
-async def test_chain_without_end_node_raises_instead_of_returning_silently() -> None:
-    """The chain runs out of edges at `n_tool`, never reaching an `end` node.
-    Day 3's by-type `end` lookup made this a loud `KeyError`; an edge-derived
-    walk would otherwise fall out of the loop and hand back a normal-looking
-    `RunResult`, making a truncated run indistinguishable from a complete one
-    (`RunResult` has no "terminated" field for a caller to check)."""
+async def test_chain_without_end_node_returns_truncated_run_result_silently() -> None:
+    """The chain runs out of edges at `n_tool`, never reaching an `end`
+    node. DEC-A dropped the "must terminate on `end`" guard; `run()` now
+    simply `break`s out of the walk loop and returns a normal `RunResult`
+    with whatever state it accumulated. This is intentionally the exact
+    danger the removed guard's own comment warned about — "a truncated run
+    would be indistinguishable from a complete one to every caller" —
+    accepted on purpose per DEC-A, not an oversight. `final_state` has an
+    entry for every node the walk actually visited (`n_kb`, `n_llm`,
+    `n_tool`) and no `terminated` flag exists on `RunResult` to tell this
+    apart from a run that legitimately ended at `end`."""
     nodes = [
         Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={}),
         Node(id="n_llm", type=NodeType.LLM_STEP, params={}),
@@ -251,8 +273,9 @@ async def test_chain_without_end_node_raises_instead_of_returning_silently() -> 
     ]
     edges = [Edge(from_="n_kb", to="n_llm"), Edge(from_="n_llm", to="n_tool")]
 
-    with pytest.raises(ValueError, match="without executing an `end` node"):
-        await _run(_recipe(nodes, edges))
+    result = await _run(_recipe(nodes, edges))
+
+    assert list(result.final_state.keys()) == ["n_kb", "n_llm", "n_tool"]
 
 
 async def test_llm_step_threads_chunks_from_its_walk_upstream_kb_not_last_declared() -> None:

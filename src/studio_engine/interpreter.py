@@ -9,31 +9,20 @@ Day 6 (spec AIE-1, plan risk R2 lifted): walk order is now DERIVED from
 `recipe.dag.edges` — Day 3's hardcoded `_WALK_ORDER` `NodeType` tuple is
 gone. `condition` branching (`Edge.when`) is still unevaluated
 (`ConditionExecutor` stays `NotImplementedError`), so this phase only
-supports a finite single-successor chain and refuses anything else with a
-`ValueError` rather than guessing. The four structural preconditions:
+supports a finite single-successor chain.
 
-1. exactly 1 start node (no incoming edge) — `_find_start_node_id`
-2. every node has ≤ 1 outgoing edge — `_build_next_map`
-3. no node is visited twice (no reachable cycle) — the walk's `visited` set
-4. the chain terminates ON an `end` node, not merely by running out of edges
-
-None of the four may be delegated upstream, for a reason that does not
-depend on how far along `graph_lint` (spec SWE) happens to be: `run()`
-never CALLS it. Nothing in this module can observe whether a recipe was
-linted, so treating any of these as somebody else's job would mean trusting
-a check this code cannot see. Rule (4) additionally has no upstream twin at
-all — graph_lint's 4 rules say nothing about an `end` node being reachable
-or terminal. Without (3) a graph like `a -> b -> b` passes (1) and (2) and
-would spin forever, growing `events` and calling `trace_writer.write`
-without bound.
-
-(Do NOT re-state graph_lint's implementation status here. An earlier cut of
-this docstring claimed its "4 specified rules cover neither a lasso cycle
-nor an `end` node" — the lasso half was already false when written: rule 2
-"no forbidden cycle" has been in the spec since the stub, and workbench#12
-implements it as a 3-color DFS that does reject `a -> b -> b`. The `visited`
-set below is defense-in-depth, which is a claim about THIS module and stays
-true either way.)
+Day 12 (spec AIE-1, DEC-A): `run()` no longer validates `recipe.dag`'s
+structure itself. It TRUSTS that `recipe.dag` already passed `graph_lint`
+(spec SWE, `packages/workbench/src/studio_workbench/validator.py`) before
+reaching here, and walks it as-is — no start-node count check, no
+outgoing-edge-count check, no cycle guard, no "must terminate on `end`"
+check. A recipe that violates one of those turns into whatever Python error
+that produces naturally (e.g. `IndexError`), or a silent-but-deterministic
+walk (last-declared edge wins on ambiguous branching; the walk simply stops
+and returns when it runs off the end of the chain) — never a hand-rolled
+fallback that hides the mismatch. See
+`docs/decisions/decision-log.md` (entry DL-12.A1-1) for the full DEC-A/B/C
+rationale and the accepted risk; this docstring does not repeat it.
 """
 
 from __future__ import annotations
@@ -78,27 +67,31 @@ _NO_COST = 0.0
 
 def _find_start_node_id(dag: Dag) -> str:
     """The DAG's sole entry point: the one node id no edge's `.to` targets.
-    0 or >1 candidates means the recipe doesn't describe a single walkable
-    chain — fail loud instead of guessing which one to start from."""
+
+    Day 12 (DEC-A): no longer validates `len(starts) == 1` — that is now
+    `graph_lint`'s job (spec SWE), not this module's. `starts[0]` is
+    returned directly: if `starts` is empty (every node has an incoming
+    edge — a cycle with no entry point), Python's own `IndexError` on the
+    empty list surfaces naturally, no hand-rolled fallback. If `starts` has
+    >1 candidate, the first one in `dag.nodes` declaration order is picked
+    silently — an ambiguous recipe that reaches here is assumed already
+    invalid per `graph_lint`, not re-diagnosed here."""
     targets = {edge.to for edge in dag.edges}
     starts = [node.id for node in dag.nodes if node.id not in targets]
-    if len(starts) != 1:
-        raise ValueError(f"recipe.dag must have exactly 1 start node (no incoming edge), found {len(starts)}: {starts}")
     return starts[0]
 
 
 def _build_next_map(edges: list[Edge]) -> dict[str, str]:
-    """`from_ -> to` single-successor lookup. >1 outgoing edge from the same
-    node is `condition`-node branching (`Edge.when`) — unevaluated this
-    phase (`ConditionExecutor` is still `NotImplementedError`), so it raises
-    rather than silently picking one arm."""
+    """`from_ -> to` single-successor lookup.
+
+    Day 12 (DEC-A): no longer rejects >1 outgoing edge from the same node
+    (`condition`-node branching, `Edge.when`, is still unevaluated this
+    phase — `ConditionExecutor` stays `NotImplementedError`). Plain dict
+    assignment per edge means the LAST-declared edge for a given `from_`
+    wins (last-write-wins), silently — enforcing "at most 1 outgoing edge"
+    is now `graph_lint`'s job (spec SWE), not this module's."""
     next_by_id: dict[str, str] = {}
     for edge in edges:
-        if edge.from_ in next_by_id:
-            raise ValueError(
-                f"node {edge.from_!r} has >1 outgoing edge — condition branching is not "
-                "evaluated this phase (ConditionExecutor is unimplemented)"
-            )
         next_by_id[edge.from_] = edge.to
     return next_by_id
 
@@ -177,20 +170,12 @@ async def run(
     phase — no real cost model exists yet (`obs.costs` is a schema-shell,
     DE's later work).
 
-    No graph-lint validation seam is wired in here (workbench's `graph_lint`,
-    spec SWE) and none is planned: lint runs at PUBLISH time, `run()` at
-    execute time, and a recipe can reach an interpreter without having gone
-    through this deployment's publish path at all. So `run()` defends itself
-    with the 4 structural preconditions listed in the module docstring, each
-    raising `ValueError`.
-
-    Those preconditions are STRICTER than graph_lint's 4 rules — precondition
-    (2) (≤ 1 outgoing edge) and (4) (must terminate ON an `end` node) have no
-    upstream twin, because `condition` branching is still unevaluated here.
-    A recipe can therefore pass publish-time lint and still be rejected at
-    run time. That gap is intentional for now, but it is a REAL divergence
-    between two published contracts, and closing it is cross-lane work
-    (AIE-1 + SWE), not something this module decides alone.
+    Dispatch order is still derived from `recipe.dag.edges` exactly as
+    before (Day 6 behavior unchanged) — only the validation stance changed.
+    `run()` does not call `graph_lint` (workbench's, spec SWE) and does not
+    re-validate the structure itself either (Day 12, DEC-A): it trusts
+    `recipe.dag` arrived already-linted. See `docs/decisions/decision-log.md`
+    (entry DL-12.A1-1) for why and the accepted risk — not repeated here.
     """
     executors: dict[NodeType, NodeExecutor] = {
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
@@ -224,22 +209,8 @@ async def run(
     # declaration order no longer implies execution order, so a by-type lookup
     # could supply a sibling branch's query.
     last_kb_query: object = ""
-    # Cycle guard: `_find_start_node_id` only rejects a graph whose every node
-    # has an incoming edge, and `_build_next_map` only rejects out-degree > 1.
-    # A "lasso" (`a -> b -> b`, or `a -> b -> c -> b`) passes both and would
-    # spin forever here — unbounded `events` growth AND unbounded
-    # `trace_writer.write` calls. graph_lint's no-cycle rule (spec SWE) also
-    # rejects lassos, but this guard is not redundant: `run()` never calls
-    # graph_lint, so an unlinted recipe reaching here would hit nothing else.
-    visited: set[str] = set()
     current_id: str = _find_start_node_id(recipe.dag)
     while True:
-        if current_id in visited:
-            raise ValueError(
-                f"recipe.dag has a cycle — node {current_id!r} revisited; this phase walks "
-                "a finite single-successor chain and has no loop semantics"
-            )
-        visited.add(current_id)
         node = nodes_by_id[current_id]
         node_type = node.type
         if node_type is NodeType.KB_RETRIEVE:
@@ -336,17 +307,16 @@ async def run(
             break
         next_id = next_by_id.get(current_id)
         if next_id is None:
-            # The chain ran out of edges before an `end` node executed. Day 3's
-            # `nodes_by_type[NodeType.END]` lookup made a missing terminal a
-            # loud `KeyError`; an edge-derived walk would otherwise just fall
-            # out of the loop and return a normal-looking `RunResult`, so a
+            # Day 12 (DEC-A): the chain ran out of edges before an `end` node
+            # executed. Previously this raised loudly — now it just `break`s
+            # and returns whatever `RunResult` was accumulated so far. This
+            # IS the exact danger the old comment here warned about: "a
             # truncated run would be indistinguishable from a complete one to
-            # every caller (`RunResult` carries no "terminated" flag, and
-            # evalhub scores it the same either way). Keep the failure loud.
-            raise ValueError(
-                f"recipe.dag walk ended at node {current_id!r} (no outgoing edge) without "
-                f"executing an `end` node — visited {len(visited)} node(s): {sorted(visited)}"
-            )
+            # every caller" (`RunResult` carries no "terminated" flag, and
+            # evalhub scores it the same either way). Accepted on purpose per
+            # DEC-A (see docs/decisions/decision-log.md, DL-12.A1-1) — not an
+            # oversight.
+            break
         current_id = next_id
 
     return RunResult(run_id=run_id, events=events, final_state=state)
