@@ -1,16 +1,21 @@
 """6 node-executor stubs (spec AIE-1, R-SPEC A2) — one class per closed
-`NodeType` (umbrella-contract.md:62-73). Every class below is an INTERFACE
-STUB: the constructor wires the collaborator Protocol(s) each node type
-consumes at runtime, but `execute()` is `NotImplementedError` — the real
-dispatch body is AIE-1's own OJT deliverable. Filling it in ahead of time
-(here, on this phase) is exactly the anti-pattern the phase's own risk table
-calls out: "Executor làm xanh hộ (impl logic)".
+`NodeType` (umbrella-contract.md:62-73). The constructor of each wires the
+collaborator Protocol(s) that node type consumes at runtime. As of
+plan `260806-0938-d14-aie1-node-executors-grid-prep` (D14 phase 1),
+`ConditionExecutor` and `HitlPauseExecutor` are filled bodies (grammar
+evaluation and pause-shaped output, respectively) — the same status the
+other 4 executors already had. The one remaining `NotImplementedError` is a
+genuine, still-open seam: `ToolCallExecutor`'s `dispatcher=None`
+defense-in-depth branch (see its own docstring below).
 """
 
 from __future__ import annotations
 
+import json
+import operator
 import re
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from studio_contracts import LLM, EmbeddingService, KbSearch, KbSearchResultItem, Node, Tokens
@@ -261,14 +266,148 @@ class LlmStepExecutor:
         }
 
 
+# `when` grammar v0 (engine-local, free-to-change — DEC-A/DL-12.A1-1): exactly
+# 3 tokens, `"<field> <op> <literal>"`. Regex is intentionally linear (no
+# nested quantifiers, requirement 8) — 0.85ms measured on a 200k-char input
+# (red-team round 1), and the hard 200-char cutoff below (requirement 6)
+# means it never sees an input anywhere near that size in practice anyway.
+# `op` alternation order is load-bearing: `<=`/`>=`/`!=` MUST be listed
+# before their 1-char prefix (`<`/`>`/... ) or e.g. `"a <= 1"` silently
+# parses as op `<` with a garbage RHS `"= 1"`.
+_WHEN_MAX_LEN = 200
+_WHEN_RE = re.compile(r'^(?P<field>[A-Za-z_]\w*)\s*(?P<op>==|!=|<=|>=|<|>)\s*(?P<value>"[^"]*"|\S+)$')
+_OPS: dict[str, Callable[[Any, Any], bool]] = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<=": operator.le,
+    ">=": operator.ge,
+    "<": operator.lt,
+    ">": operator.gt,
+}
+# Sentinel distinct from `None`/any real params value — tells "the `state`
+# key is entirely absent from `node.params`" (no upstream node ran yet, this
+# `condition` is the first node in the DAG) apart from "the key is present
+# and its value happens to be an empty dict" (requirement 7 step 4, F8).
+_NO_STATE = object()
+
+
+def _parse_literal(raw: str) -> object:
+    """Resolve a `when` value token to a real Python value — NEVER `eval`/
+    `exec`/`ast.literal_eval` (requirement 4). `json.loads` handles both the
+    quoted-string and bare-word forms (`"PASS"` -> `"PASS"`; `false` -> the
+    Python `bool` `False`); anything that isn't valid JSON falls back to the
+    literal raw string, which is only ever used for comparison/echo, never
+    executed.
+
+    Both exception types matter (requirement 6, F2 — measured 2026-08-06 on
+    this repo's CPython 3.14.4): `json.JSONDecodeError` is a `ValueError`
+    subclass, but `json.loads` recurses on deeply-nested input and raises a
+    bare `RecursionError` instead once nesting is deep enough — a payload
+    like `"["*20000` is NOT caught by `except ValueError` alone. The caller
+    additionally cuts `when` off at `_WHEN_MAX_LEN` BEFORE any regex/JSON
+    processing (belt 1); this `except` clause is belt 2, in case a future
+    change to the grammar ever calls `_parse_literal` on an un-length-checked
+    value token."""
+    try:
+        return json.loads(raw)
+    except (ValueError, RecursionError):
+        return raw
+
+
+def _condition_result(when: str | None, result: bool | None, reason: str) -> dict[str, object]:
+    """The ONE place `ConditionExecutor.execute`'s output dict is built (DRY
+    — the alternative is repeating the same 3-key literal at up to 7 return
+    sites). `when` is truncated to `_WHEN_MAX_LEN` on the way out (requirement
+    9, F9): the echoed value flows straight into `TraceEvent.outputs`, and
+    `Edge.when` (`packages/contracts/src/studio_contracts/recipe.py:45`) is
+    client-declared data with no length limit of its own — the echo must
+    never re-introduce the same unbounded-size hazard the length check above
+    exists to close off."""
+    return {"when": when[:_WHEN_MAX_LEN] if when is not None else None, "result": result, "reason": reason}
+
+
 class ConditionExecutor:
     """`condition` node — branches on `edges[].when` evaluated against the
     upstream node's output (e.g. a verdict/score). SWE co-owns the `when`
     expression's grammar (recipe schema/graph-lint); AIE-1 owns evaluating it
-    at runtime here (spec AIE-1, R-SPEC A2)."""
+    at runtime here (spec AIE-1, R-SPEC A2).
+
+    Grammar v0 (engine-local, free-to-change — DEC-A/DL-12.A1-1, NOT the
+    grammar SWE's recipe-validator will eventually standardize on): exactly
+    3 whitespace-separated tokens, `"<field> <op> <literal>"`.
+    - `field`: `[A-Za-z_]\\w*`, looked up via `state[field]` dict subscript
+      — NEVER `getattr` (requirement 4; a subscript lookup makes a
+      dunder-shaped field name harmless, where `getattr` on user-declared
+      data would not be).
+    - `op`: one of `==`, `!=`, `<=`, `>=`, `<`, `>`, dispatched through the
+      whitelisted `_OPS` table (`operator.eq`/`ne`/`le`/`ge`/`lt`/`gt`) —
+      never a dynamic/string-eval'd operator.
+    - `literal`: a bare token (no whitespace) or a double-quoted string;
+      resolved via `_parse_literal` (`json.loads` + raw-string fallback).
+
+    Output invariant (requirement 2, locked by `test_result_is_bool_iff_
+    reason_is_ok`): `execute` ALWAYS returns `{"when": <str|None>, "result":
+    <bool|None>, "reason": <str>}`, and `result` is a `bool` IF AND ONLY IF
+    `reason == "ok"` — every other `reason` means "could not evaluate",
+    which is deliberately distinct from "evaluated to False". `reason` is
+    one of: `"ok"`, `"no-when-declared"`, `"when-too-long"`,
+    `"unparsable-grammar"`, `"no-upstream-output"`, `"state-not-a-dict"`,
+    `"field-missing"`, `"type-mismatch"`.
+
+    Fail-closed contract for a future router (requirement 2): ANY
+    `reason != "ok"` MUST be treated as "do not branch" — `None` is falsy in
+    a boolean context, so a caller that just checks truthiness of `result`
+    already gets this for free.
+
+    Safety (requirement 4-6): `execute` NEVER calls `eval`/`exec`/
+    `ast.literal_eval`/`getattr`-on-user-data, and NEVER raises. Every
+    failure mode (bad grammar, missing/wrong-shaped `state`, a `TypeError`
+    from comparing incompatible types) becomes a `reason` string instead —
+    `interpreter.py:250`'s `await executors[node_type].execute(node)` has no
+    surrounding `try/except`, so a raise here would escape mid-walk and kill
+    the whole run after earlier nodes already wrote their `TraceEvent`s (the
+    truncated-run hazard `interpreter.py:310-318` warns about). A malformed
+    `when` therefore reports `reason="unparsable-grammar"` with
+    `result=None` — never a silent `False`.
+
+    `reason` is an engine-local implementation detail, not a public/frozen
+    API (same status as `RunResult`, `interpreter.py:100-105`) — free to
+    change without a contract bump. The one thing anything outside this
+    module may rely on is the fail-closed rule above.
+
+    Limitation, stated rather than hidden: this executor only EVALUATES the
+    expression. `interpreter.py` (phase 2 of this plan) does not yet branch
+    the walk on this result — that wiring is out of scope here."""
 
     async def execute(self, node: Node) -> object:
-        raise NotImplementedError("spec AIE-1: condition executor body — see R-SPEC A2")
+        raw_when = node.params.get("when")
+        when = raw_when if isinstance(raw_when, str) else None
+        if not when:
+            return _condition_result(None, None, "no-when-declared")
+        if len(when) > _WHEN_MAX_LEN:
+            return _condition_result(when, None, "when-too-long")
+
+        match = _WHEN_RE.match(when)
+        if match is None:
+            return _condition_result(when, None, "unparsable-grammar")
+
+        raw_state = node.params.get("state", _NO_STATE)
+        if raw_state is _NO_STATE:
+            return _condition_result(when, None, "no-upstream-output")
+        if not isinstance(raw_state, dict):
+            return _condition_result(when, None, "state-not-a-dict")
+
+        field = match.group("field")
+        if field not in raw_state:
+            return _condition_result(when, None, "field-missing")
+
+        op = match.group("op")
+        literal = _parse_literal(match.group("value"))
+        try:
+            outcome = _OPS[op](raw_state[field], literal)
+        except TypeError:
+            return _condition_result(when, None, "type-mismatch")
+        return _condition_result(when, bool(outcome), "ok")
 
 
 @runtime_checkable
@@ -320,10 +459,21 @@ class HitlPauseExecutor:
     the playground for an external approval before the interpreter resumes
     along this node's downstream edge. SWE wires the playground-side
     approval UI; AIE-1 owns this pause/emit/yield executor body (spec AIE-1,
-    R-SPEC A2)."""
+    R-SPEC A2).
+
+    Output shape (v0): `{"paused": True, "status": "pending_approval"}` — a
+    real pause-SHAPED value, JSON-serializable so it can flow into
+    `TraceEvent.outputs` like every other executor's output. This does NOT
+    actually pause anything: `interpreter.py`'s walk loop (phase 2 of this
+    plan, and INV-2 more broadly) has no knowledge of this executor and does
+    not stop, wait, or yield on it — that wiring (halt the walk, persist a
+    resumable run state, resume on external approval) is a separate,
+    still-open deliverable. This class's only job right now is producing the
+    output shape a future pause/resume mechanism will key off of."""
 
     async def execute(self, node: Node) -> object:
-        raise NotImplementedError("spec AIE-1: hitl-pause executor body — see R-SPEC A2, INV-2")
+        del node
+        return {"paused": True, "status": "pending_approval"}
 
 
 class EndExecutor:
