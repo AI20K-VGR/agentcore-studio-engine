@@ -30,13 +30,16 @@ hơn, không được đứt gãy walking-skeleton.
 
 - **Đủ bản (S1 cuối / S2):** cả 6 node-type (`kb-retrieve`, `llm-step`, `condition`, `tool-call`,
   `hitl-pause`, `end`) có thân `execute()` thật, không còn `NotImplementedError`.
-- **Cắt xuống (Day 3, ĐANG Ở NẤC NÀY):** chỉ điền thân 4/6 executor
+- **Cắt xuống (Day 3, lịch sử):** chỉ điền thân 4/6 executor
   (`kb-retrieve`/`llm-step`/`tool-call`/`end`); `ConditionExecutor`/`HitlPauseExecutor` giữ nguyên
-  `NotImplementedError` có chủ đích — khóa bằng
-  `tests/test_executors_behavior.py::test_condition_hitl_still_not_implemented`, không phải bỏ
-  sót.
-- **Trạng thái hiện tại:** **đã cắt, đúng kế hoạch** — PR #2 (`agentcore-studio-engine`,
-  `day3/interpreter-3node`) chỉ điền 4/6, ghi rõ 2 executor còn lại trong docstring + test khóa.
+  `NotImplementedError` có chủ đích — khóa bằng test riêng cho trạng thái "chưa cài" đó (đã xoá ở
+  Phase 1, D14, khi 2 executor còn lại được điền thân thật), không phải bỏ sót.
+- **Trạng thái hiện tại (D14):** **6/6 executor có thân thật**, không còn `NotImplementedError` —
+  khóa bằng `tests/test_executors_behavior.py::test_hitl_pause_returns_pause_shaped_output` (thay
+  cho test khóa cũ ở trên). Phần còn thiếu của Nấc 3 chỉ còn: `hitl-pause` chưa nối pause/resume
+  thật (INV-2), và interpreter chưa rẽ nhánh thật theo kết quả `condition` (DEC-A/DL-12.A1-1
+  không đổi). PR #2 (Day 3, `day3/interpreter-3node`) chỉ điền 4/6 lúc đó, đúng kế hoạch descope
+  tại thời điểm đó.
 
 ## Nấc 4 — Interpreter đọc `dag` động từ recipe (factory/DI-container generic)
 
