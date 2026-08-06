@@ -32,19 +32,31 @@ Chạy lại
 --------
     uv run python packages/engine/scripts/measure_chunk_embed.py
     uv run python packages/engine/scripts/measure_chunk_embed.py --null
+    uv run python packages/engine/scripts/measure_chunk_embed.py --grid
+    uv run python packages/engine/scripts/measure_chunk_embed.py --golden packages/kb/golden/smoke-5.yaml --grid
 
 Không mạng, không model, không Postgres. Cùng công thức dẫn xuất với
 `studio_kb.embeddings.derive_vector` (blake2b bag-of-words, chuẩn hoá L2) để số ở đây so
 được trực tiếp với bảng cosine D7 của DE trong docstring module đó.
+
+Seam `EmbeddingService` (D14 #96)
+----------------------------------
+`--grid` chấm qua seam `EmbeddingService` thật (`studio_contracts.protocols`) thay vì gọi
+thẳng `derive()`, dùng `embed_harness.as_embedder` để adapt Protocol async-batch sang chữ
+ký đồng bộ mà `score()` đang cần. Registry `SERVICES` (bên dưới) sống Ở ĐÂY, không ở
+`embed_harness.py`: nó trỏ `studio_kb.embeddings.derive_vector`, mà `embed_harness.py`
+phải giữ thuần stdlib (không được kéo `studio_kb`).
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import math
 import re
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -53,8 +65,10 @@ _KB = _ROOT / "packages" / "kb"
 sys.path.insert(0, str(_ROOT / "packages" / "contracts" / "src"))
 sys.path.insert(0, str(_KB / "src"))
 
-import yaml  # type: ignore[import-untyped]  # noqa: E402  — `types-PyYAML` không có trong lock; thêm một dep chỉ để chú kiểu cho 1 script đo là không đáng
+from embed_harness import as_embedder, load_cases  # noqa: E402
+from studio_contracts import EmbeddingService  # noqa: E402
 from studio_kb.doc_factory import chunk_document  # noqa: E402
+from studio_kb.embeddings import derive_vector  # noqa: E402
 
 GOLDEN = "smoke-10.yaml"
 DIMS = (8, 16, 32, 64, 128, 256)
@@ -161,13 +175,6 @@ def load_corpus(cutter: Cutter) -> list[Row]:
     return rows
 
 
-def load_cases(name: str = GOLDEN) -> list[dict[str, Any]]:
-    """Chỉ lấy case DƯƠNG (có `expected_citation`). Case từ chối chấm nhánh khác."""
-    raw: dict[str, Any] = yaml.safe_load((_KB / "golden" / name).read_text(encoding="utf-8"))
-    cases: list[dict[str, Any]] = raw["cases"]
-    return [c for c in cases if c.get("expected_citation")]
-
-
 def count_leak(rows: Sequence[Row]) -> int:
     """Đếm hàng `(chunk, vai)` phục vụ text thật ra thuộc vai KHÁC.
 
@@ -222,8 +229,15 @@ def _embedder(dim: int) -> Embedder:
     return lambda text: derive(text, dim)
 
 
-def sweep(cases: Sequence[dict[str, Any]]) -> None:
-    print(f"corpus: packages/kb/docs/callisto/ · golden: {GOLDEN} · {len(cases)} case dương\n")
+def sweep(cases: Sequence[dict[str, Any]], golden: str = GOLDEN) -> None:
+    """`golden` is the ACTUAL golden identifier resolved for this run
+    (`args.golden` from `main()`), never the module constant `GOLDEN` — a
+    `--golden smoke-5.yaml` run must print "golden: smoke-5.yaml" in the
+    header, not the default's name (D14 #96 review I-2: the printed
+    provenance must match the data actually measured, since this output
+    gets pasted straight into the design-note as evidence). The default
+    keeps the module constant so the no-args call site is unchanged."""
+    print(f"corpus: packages/kb/docs/callisto/ · golden: {golden} · {len(cases)} case dương\n")
     for gname, cutter in GRANULARITY.items():
         rows = load_corpus(cutter)
         tokens = {t for _c, text, _t, _r in rows for t in text.lower().split()}
@@ -293,14 +307,113 @@ def null_control(cases: Sequence[dict[str, Any]]) -> None:
         print(f"{label:<44} {f'{hits}/{len(cases)}':>9} {contested:>6} {uniq:>16}")
 
 
-def main() -> None:
-    cases = load_cases()
-    if "--null" in sys.argv:
-        null_control(cases)
-    else:
-        sweep(cases)
+# ─────────────────────────────────────── seam EmbeddingService: registry pluggable (D14 #96)
+
+
+@dataclass(frozen=True)
+class ServiceEntry:
+    """Một dòng registry: nhãn hiển thị (phải trung thực — R-6) + impl thoả `EmbeddingService`."""
+
+    label: str
+    impl: EmbeddingService
+
+
+class _KbDeriveService:
+    """Bọc `studio_kb.embeddings.derive_vector` (dim=8, bản đang chạy trong repo) thành
+    `EmbeddingService` — impl thật, không phải mô phỏng."""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [derive_vector(text) for text in texts]
+
+
+class _BowWideService:
+    """`derive(text, 256)` — CÙNG họ bag-of-words với bản đang chạy, chỉ khác bề rộng
+    (256 thay vì 8). Nhãn phải nói rõ "biến thể bề rộng", không phải "impl khác" (P3-R5,
+    R-6) — impl gateway/model không ship trong kit này (`docs/system-architecture.md` §6)."""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [derive(text, 256) for text in texts]
+
+
+class _NullConstService:
+    """CONTROL — vector hằng số, 0 bit thông tin. KHÔNG phải một impl embedding."""
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] for _ in texts]
+
+
+SERVICES: dict[str, ServiceEntry] = {
+    "kb-derive": ServiceEntry("kb.derive_vector (dim=8, bản đang chạy)", _KbDeriveService()),
+    "bow-256": ServiceEntry("bag-of-words dim=256 (biến thể bề rộng)", _BowWideService()),
+    "null-const": ServiceEntry("CONTROL: vector hằng số (0 bit thông tin)", _NullConstService()),
+}
+
+DEFAULT_IMPLS: tuple[str, ...] = ("kb-derive", "bow-256")
+
+
+def service_grid(
+    cases: Sequence[dict[str, Any]], impl_keys: Sequence[str] = DEFAULT_IMPLS, golden: str = GOLDEN
+) -> None:
+    """Bảng cách cắt × impl `EmbeddingService` — dùng lại `score()`/`GRANULARITY` đang có,
+    KHÔNG viết lại logic chấm (yêu cầu 4).
+
+    `null-const` KHÔNG nằm trong `impl_keys` mặc định — nó luôn in thành một hàng CONTROL
+    riêng ở cuối mỗi cách cắt, để không lẫn với impl thật (R-6, T5).
+
+    `golden` (D14 #96 review I-2/S-1): trước bản vá này header không in golden nào cả, nên
+    một lần `--grid` chạy với `--golden` khác mặc định không phân biệt được với lần chạy
+    mặc định — in luôn nhãn golden thật đã resolve để output tự đủ bằng chứng.
+    """
+    print(f"corpus: packages/kb/docs/callisto/ · golden: {golden} · {len(cases)} case dương\n")
+    for gname, cutter in GRANULARITY.items():
+        rows = load_corpus(cutter)
+        print(f"=== cắt = {gname} · {len(rows)} hàng ===")
+        print(f"{'impl':<44} {'recall@1':>9} {'tranh':>6} {'mất':>5} {'margin tb':>10}")
+        for key in impl_keys:
+            entry = SERVICES[key]
+            embed = as_embedder(entry.impl)
+            margins, hits, contested, unreachable = score(rows, cases, embed)
+            avg = f"{sum(margins) / len(margins):.3f}" if margins else "n/a"
+            print(f"{entry.label:<44} {f'{hits}/{len(cases)}':>9} {contested:>6} {unreachable:>5} {avg:>10}")
+        control = SERVICES["null-const"]
+        embed = as_embedder(control.impl)
+        margins, hits, contested, unreachable = score(rows, cases, embed)
+        avg = f"{sum(margins) / len(margins):.3f}" if margins else "n/a"
+        print(f"{control.label:<44} {f'{hits}/{len(cases)}':>9} {contested:>6} {unreachable:>5} {avg:>10}")
         print()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Đo trade-off chunking × embedding (AIE-1, D11/D14).")
+    parser.add_argument(
+        "--golden",
+        default=GOLDEN,
+        help=f"tên golden dưới packages/kb/golden/ hoặc đường dẫn tường minh (mặc định {GOLDEN})",
+    )
+    parser.add_argument(
+        "--impl",
+        action="append",
+        default=None,
+        choices=list(SERVICES),
+        help=f"key SERVICES, lặp lại được (mặc định {','.join(DEFAULT_IMPLS)}); dùng với --grid",
+    )
+    parser.add_argument("--null", action="store_true", help="chỉ chạy null control (hành vi cũ, không đổi)")
+    parser.add_argument("--grid", action="store_true", help="in bảng cách cắt × impl EmbeddingService (D14)")
+    return parser
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
+    cases = load_cases(args.golden)
+    if args.grid:
+        service_grid(cases, tuple(args.impl) if args.impl else DEFAULT_IMPLS, golden=args.golden)
+        return
+    if args.null:
         null_control(cases)
+        return
+    sweep(cases, golden=args.golden)
+    print()
+    null_control(cases)
 
 
 if __name__ == "__main__":

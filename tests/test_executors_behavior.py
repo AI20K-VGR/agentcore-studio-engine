@@ -1,11 +1,14 @@
-"""Behavioral tests for the 4 filled node-executor bodies (phase 1, spec
-AIE-1, plan `260722-0956-day3-interpreter-3node`).
+"""Behavioral tests for the filled node-executor bodies (phase 1 of Day 3,
+spec AIE-1, plan `260722-0956-day3-interpreter-3node`; `ConditionExecutor`
+and `HitlPauseExecutor` bodies filled later, plan
+`260806-0938-d14-aie1-node-executors-grid-prep`).
 
 Real teeth per `docs/code-standards.md` §4.1: every assertion below pins a
 concrete stub-shaped value (not a bare `pytest.raises(NotImplementedError)`)
-— that form is reserved for the 2 still-unfilled executors
-(`test_condition_hitl_still_not_implemented`), which is the ONLY test here
-allowed to use it (scope-fence: Condition/Hitl stay out of Day 3 scope).
+— that form is now valid for exactly ONE test in this repo,
+`test_tool_call_no_dispatcher_still_not_implemented` (the `dispatcher=None`
+defense-in-depth branch, genuinely still unfilled). `ConditionExecutor`'s
+own `when`-grammar behavior is covered in `test_condition_when_grammar.py`.
 """
 
 from __future__ import annotations
@@ -18,7 +21,6 @@ import pytest
 from studio_contracts import KbSearchResultItem, Node, NodeType, Tokens
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM, WhitelistToolDispatch
 from studio_engine.executors import (
-    ConditionExecutor,
     EndExecutor,
     HitlPauseExecutor,
     KbRetrieveExecutor,
@@ -192,13 +194,13 @@ async def test_end_terminates() -> None:
     assert result == {"terminated": True}
 
 
-async def test_condition_hitl_still_not_implemented() -> None:
-    """Scope-fence (KHOÁ): Day 3 does NOT prematurely implement these 2
-    executors — spec-contract form (`pytest.raises(NotImplementedError)`) is
-    correct here because this locks the current STUB state, not a business
-    property."""
-    node = Node(id="n5", type=NodeType.CONDITION, params={})
-    with pytest.raises(NotImplementedError):
-        await ConditionExecutor().execute(node)
-    with pytest.raises(NotImplementedError):
-        await HitlPauseExecutor().execute(node)
+async def test_hitl_pause_returns_pause_shaped_output() -> None:
+    """T13 — `HitlPauseExecutor` returns a real pause-shaped dict. It does
+    NOT actually pause anything (the interpreter has no idea this executor
+    exists, per its docstring's INV-2 limitation) — this test pins only the
+    output shape, JSON-serializable so it can flow into `TraceEvent.outputs`
+    the same as every other executor's output."""
+    node = Node(id="n5", type=NodeType.HITL_PAUSE, params={})
+    result = await HitlPauseExecutor().execute(node)
+    assert result == {"paused": True, "status": "pending_approval"}
+    json.dumps(result)

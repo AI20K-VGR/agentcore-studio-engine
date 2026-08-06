@@ -7,9 +7,17 @@ preserves insertion order, no `OrderedDict` needed).
 
 Day 6 (spec AIE-1, plan risk R2 lifted): walk order is now DERIVED from
 `recipe.dag.edges` — Day 3's hardcoded `_WALK_ORDER` `NodeType` tuple is
-gone. `condition` branching (`Edge.when`) is still unevaluated
-(`ConditionExecutor` stays `NotImplementedError`), so this phase only
-supports a finite single-successor chain.
+gone.
+
+Day 14 (plan `260806-0938-d14-aie1-node-executors-grid-prep` phase 2):
+`condition` nodes now receive real `state` (the walk's last output) and
+`when` (from the outgoing edge the walk actually takes, `_build_edge_map`)
+injected into `node.params` before dispatch, the same pattern `kb-retrieve`
+and `llm-step` already use below — `ConditionExecutor` is no longer a
+`NotImplementedError` stub (P1 of the same plan filled its body). The walk
+still does NOT branch on a `condition`'s own `result` (DEC-A is unchanged):
+this remains a finite single-successor chain regardless of what any
+`condition` node evaluates to.
 
 Day 12 (spec AIE-1, DEC-A): `run()` no longer validates `recipe.dag`'s
 structure itself. It TRUSTS that `recipe.dag` already passed `graph_lint`
@@ -64,6 +72,17 @@ from studio_engine.session import SessionContext
 # this fixed cost, never a computed one.
 _NO_COST = 0.0
 
+# Day 14 (F8): sentinel distinct from `None`/`{}`/any real executor output —
+# tells "no node has run yet this walk" (a `condition` is the DAG's start
+# node) apart from "the last node ran and returned an empty dict/list". A
+# bare `{}` cannot make that distinction: `ConditionExecutor` would read an
+# empty dict as "upstream ran, state has no fields" (`reason="field-missing"`)
+# instead of the true "no upstream at all" (`reason="no-upstream-output"`) —
+# fail-closed only by accident, the exact anti-pattern the old nil-UUID
+# sentinel (`executors.py:124-131`) was already retired for once. See
+# `_build_edge_map` above for the sibling F4 fix this same phase closes.
+_NO_UPSTREAM = object()
+
 
 def _find_start_node_id(dag: Dag) -> str:
     """The DAG's sole entry point: the one node id no edge's `.to` targets.
@@ -94,6 +113,32 @@ def _build_next_map(edges: list[Edge]) -> dict[str, str]:
     for edge in edges:
         next_by_id[edge.from_] = edge.to
     return next_by_id
+
+
+def _build_edge_map(edges: list[Edge]) -> dict[str, Edge]:
+    """`from_ -> Edge` lookup — hands a `condition` node the FULL `Edge` it
+    is about to walk (`.to` AND `.when` together), not merely its `when`.
+
+    Day 14 (plan `260806-0938-d14-aie1-node-executors-grid-prep` phase 2,
+    red-team F4): deliberately NOT `dict[str, str]` filtered to
+    `when is not None`. This map exists ONLY to hand the right `Edge` to
+    `ConditionExecutor` — it does NOT route the walk; `_build_next_map`
+    above remains the sole routing mechanism (DEC-A, single-successor).
+    Uses the exact SAME last-write-wins iteration over ALL edges as
+    `_build_next_map`: a node can have >1 outgoing edge (e.g. one with a
+    `when`, declared first, and a plain fallback edge, declared last); a
+    map that pre-filters to only `when is not None` edges could pick a
+    DIFFERENT edge than the one `_build_next_map` picks for the same
+    `from_`, so `.to` and `.when` would come from two different edges. A
+    condition would then be shown the predicate of an edge the walk never
+    took. Building both maps off the identical last-write-wins rule over
+    the identical edge list guarantees `_build_edge_map(edges)[n].to ==
+    _build_next_map(edges)[n]` always — locked by
+    `test_condition_dag_e2e.py::test_when_comes_from_the_edge_the_walk_actually_takes`."""
+    edge_by_id: dict[str, Edge] = {}
+    for edge in edges:
+        edge_by_id[edge.from_] = edge
+    return edge_by_id
 
 
 @dataclass(frozen=True)
@@ -141,14 +186,21 @@ async def run(
     #2 — NOT a generic factory): `KbRetrieveExecutor(kb_search)`,
     `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with a
     `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)`,
-    `ConditionExecutor()`, `HitlPauseExecutor()`, and `EndExecutor()` — the
-    last two are still `NotImplementedError` stubs, wired here only so a
-    recipe that happens to route through one fails with that clear error
-    instead of a bare `KeyError`. Dispatch order is derived from
-    `recipe.dag.edges` (see `_find_start_node_id`/`_build_next_map`), never
-    a fixed `NodeType` sequence, and accumulates `state[node.id] = output`.
-    Stops right after the `end` node executes, even if the recipe carries
-    more nodes past it — those are simply never reached by the walk.
+    `ConditionExecutor()`, `HitlPauseExecutor()`, and `EndExecutor()`. Day 14
+    (plan `260806-0938-d14-aie1-node-executors-grid-prep`, P1) filled both
+    `ConditionExecutor.execute` and `HitlPauseExecutor.execute` — neither
+    raises `NotImplementedError` anymore, so a recipe that routes through
+    either dispatches for real. `condition` additionally has its `state`/
+    `when` params injected below (same pattern as `kb-retrieve`/`llm-step`);
+    `hitl-pause`'s output is a real pause-shaped dict, but this walk still
+    does NOT implement actual pause/resume semantics — it dispatches
+    `hitl-pause` and immediately continues to the next edge like any other
+    node, so "pausing" a run end-to-end remains unwired here, out of this
+    phase's scope. Dispatch order is derived from `recipe.dag.edges` (see
+    `_find_start_node_id`/`_build_next_map`), never a fixed `NodeType`
+    sequence, and accumulates `state[node.id] = output`. Stops right after
+    the `end` node executes, even if the recipe carries more nodes past it —
+    those are simply never reached by the walk.
 
     `llm-step`'s `retrieved_chunks` is threaded from the `kb-retrieve` this
     WALK last passed through (`last_kb_output`), not from a by-type lookup
@@ -187,6 +239,7 @@ async def run(
     }
     nodes_by_id = {node.id: node for node in recipe.dag.nodes}
     next_by_id = _build_next_map(recipe.dag.edges)
+    edge_by_id = _build_edge_map(recipe.dag.edges)
 
     run_id = str(uuid.uuid4())
     state: dict[str, object] = {}
@@ -209,6 +262,12 @@ async def run(
     # declaration order no longer implies execution order, so a by-type lookup
     # could supply a sibling branch's query.
     last_kb_query: object = ""
+    # `condition`'s `state` param (see the injection branch below) is the
+    # WALK's last output, whatever node type produced it — not filtered to
+    # `kb-retrieve` the way `last_kb_output` above is. `_NO_UPSTREAM` (F8)
+    # distinguishes "no node has run yet" from "the last node ran and
+    # returned an empty dict", which a bare `{}` initial value could not.
+    last_output: object = _NO_UPSTREAM
     current_id: str = _find_start_node_id(recipe.dag)
     while True:
         node = nodes_by_id[current_id]
@@ -247,8 +306,38 @@ async def run(
                     }
                 }
             )
+        if node_type is NodeType.CONDITION:
+            # `state`: the walk ALWAYS determines the truth about whether
+            # upstream state exists — a client declaration never overrides
+            # that (same "server/walk-derived value always wins" stance as
+            # `kb-retrieve`'s `tenant_id` above). Two branches, together
+            # unconditional: when a node ran before this one, its output
+            # overwrites whatever the client declared; when NONE did
+            # (`condition` is the DAG's start node, F8's `_NO_UPSTREAM`
+            # case), any client-declared `state` is explicitly REMOVED
+            # rather than left to survive untouched — a start-node
+            # `condition` must always evaluate as if `state` were absent
+            # (`reason="no-upstream-output"`), never against attacker/
+            # recipe-supplied data masquerading as real upstream output
+            # (D14 #96 review I-1: a client-declared `params={"state": {...}}`
+            # on a start node must not leak through as if it were `ok`).
+            condition_params: dict[str, object] = dict(node.params)
+            if last_output is not _NO_UPSTREAM:
+                condition_params["state"] = last_output
+            else:
+                condition_params.pop("state", None)
+            # `when`: from the OUTGOING edge the walk is about to take out
+            # of this node (`_build_edge_map`, F4) — but only when the node
+            # hasn't already declared its own `when`, same "recipe declares
+            # it, recipe wins" precedence already used for `prompt`/`model`
+            # above (`executors.py:228-247`).
+            outgoing_edge = edge_by_id.get(current_id)
+            if "when" not in node.params and outgoing_edge is not None and outgoing_edge.when is not None:
+                condition_params["when"] = outgoing_edge.when
+            node = node.model_copy(update={"params": condition_params})
         output = await executors[node_type].execute(node)
         state[node.id] = output
+        last_output = output
         if node_type is NodeType.KB_RETRIEVE:
             last_kb_output = output
             last_kb_query = node.params.get("query", "")

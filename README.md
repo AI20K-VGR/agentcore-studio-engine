@@ -110,9 +110,12 @@ end`, `studio_engine.__main__.build_demo_recipe()`) qua `interpreter.run()`, wir
 demo-only trong `studio_engine.demo_stubs` (`EmptyKbSearch`/`FixtureLLM`/`EmptyEmbedding`/
 `WhitelistToolDispatch`), in `final_state` ra JSON. Đây là walking-skeleton demo — không phải
 composition thật (`apps/studio` thay bằng collaborator production sau, xem docstring
-`demo_stubs.py`). 4/6 node-executor (`KbRetrieveExecutor`/`LlmStepExecutor`/`ToolCallExecutor`/
-`EndExecutor`) đã điền thân; `ConditionExecutor`/`HitlPauseExecutor` vẫn `NotImplementedError`
-(ngoài scope Day 3).
+`demo_stubs.py`). 6/6 node-executor (`KbRetrieveExecutor`/`LlmStepExecutor`/`ToolCallExecutor`/
+`EndExecutor`/`ConditionExecutor`/`HitlPauseExecutor`) đã điền thân thật, không còn
+`NotImplementedError`. Giới hạn còn lại: `HitlPauseExecutor` mới trả hình dạng pause
+(`{"paused": True, "status": "pending_approval"}`) — INV-2 (dừng/resume thật qua playground) chưa
+nối; `ConditionExecutor` evaluate `when` thật nhưng `interpreter.run()` chưa rẽ nhánh theo kết quả
+(DEC-A/DL-12.A1-1 không đổi).
 
 ## Quy tắc
 - Chỉ đụng file trong `packages/engine/**` (fence-lane của bạn) — không sửa surface domain khác.

@@ -2,10 +2,14 @@
 (phase 2, spec AIE-1, plan `260722-0956-day3-interpreter-3node`).
 
 Teeth per `docs/code-standards.md` §4.1: every assertion pins a concrete
-node-order/value, not a bare `pytest.raises(NotImplementedError)` — that
-form is reserved for the still-unfilled `condition`/`hitl-pause` seams
-(`test_executors_behavior.py::test_condition_hitl_still_not_implemented`),
-which stays out of this file's scope (scope-fence).
+node-order/value, not a bare presence check.
+
+Scope-fence: this file's recipes stay `kb-retrieve -> llm-step -> tool-call
+-> end` — no node here ever dispatches a `condition`/`hitl-pause` node
+through `run()`. Both executors got real bodies in
+`260806-0938-d14-aie1-node-executors-grid-prep` (D14 P1), and `condition`'s
+`interpreter.run()` wiring (`state`/`when` injection) is proven separately in
+`test_condition_dag_e2e.py`, which stays out of this file's scope.
 """
 
 from __future__ import annotations
@@ -128,12 +132,16 @@ async def test_run_terminates_at_end() -> None:
     """A 5th `condition` node, self-looped (its only edge points to itself,
     so it is never a `_find_start_node_id` candidate and nothing in the
     real `n_kb->n_llm->n_tool->n_end` chain ever edges into it), proves the
-    walk stops exactly at `end` without ever reaching an unrelated node:
-    `ConditionExecutor.execute` always raises `NotImplementedError`, so an
-    implementation that iterated `recipe.dag.nodes` directly (ignoring
-    `dag.edges` reachability) instead of walking edge-by-edge would trip
-    over it and blow up here — a vacuous "just don't touch it"
-    implementation can't fake this."""
+    walk stops exactly at `end` without ever reaching an unrelated node: the
+    dangling node's own edge only ever points back to itself, so the ONLY
+    way `run()` would ever dispatch it is by iterating `recipe.dag.nodes`
+    directly (ignoring `dag.edges` reachability) instead of walking
+    edge-by-edge from the real start node. `final_state` pins the exact key
+    set — a `dict` growing a stray `"n_dangling"` entry fails this
+    assertion just as loudly as `ConditionExecutor.execute` raising ever
+    did pre-D14 (`ConditionExecutor` is no longer a `NotImplementedError`
+    stub, `260806-0938-d14-aie1-node-executors-grid-prep` P1, so this test
+    no longer relies on that raise to catch a wrong-order walk)."""
     dangling = Node(id="n_dangling", type=NodeType.CONDITION, params={})
     self_loop = Edge(from_="n_dangling", to="n_dangling")
     result = await _run(_four_node_recipe(extra_nodes=[dangling], extra_edges=[self_loop]))
