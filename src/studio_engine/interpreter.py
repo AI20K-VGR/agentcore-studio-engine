@@ -307,13 +307,25 @@ async def run(
                 }
             )
         if node_type is NodeType.CONDITION:
-            # `state`: the walk's last output, unconditionally overwritten
-            # (same "server/walk-derived value always wins" stance as
-            # `kb-retrieve`'s `tenant_id` above) — only injected at all when
-            # a node actually ran before this one (F8; `_NO_UPSTREAM`).
+            # `state`: the walk ALWAYS determines the truth about whether
+            # upstream state exists — a client declaration never overrides
+            # that (same "server/walk-derived value always wins" stance as
+            # `kb-retrieve`'s `tenant_id` above). Two branches, together
+            # unconditional: when a node ran before this one, its output
+            # overwrites whatever the client declared; when NONE did
+            # (`condition` is the DAG's start node, F8's `_NO_UPSTREAM`
+            # case), any client-declared `state` is explicitly REMOVED
+            # rather than left to survive untouched — a start-node
+            # `condition` must always evaluate as if `state` were absent
+            # (`reason="no-upstream-output"`), never against attacker/
+            # recipe-supplied data masquerading as real upstream output
+            # (D14 #96 review I-1: a client-declared `params={"state": {...}}`
+            # on a start node must not leak through as if it were `ok`).
             condition_params: dict[str, object] = dict(node.params)
             if last_output is not _NO_UPSTREAM:
                 condition_params["state"] = last_output
+            else:
+                condition_params.pop("state", None)
             # `when`: from the OUTGOING edge the walk is about to take out
             # of this node (`_build_edge_map`, F4) — but only when the node
             # hasn't already declared its own `when`, same "recipe declares

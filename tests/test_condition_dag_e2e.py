@@ -336,6 +336,34 @@ async def test_condition_as_start_node_reports_no_upstream_output() -> None:
     assert cond_output["result"] is None
 
 
+async def test_start_node_condition_ignores_client_declared_fake_state() -> None:
+    """I-1 (D14 #96 final review): a start-node `condition` with a
+    client-declared `params={"state": {...}}` (spoofing upstream output)
+    must NOT get evaluated against that data — the walk's own truth about
+    "no node ran before this one" (F8's `_NO_UPSTREAM`) must win regardless
+    of what the recipe already put in `node.params`. Before the fix,
+    `interpreter.py`'s injection branch only ran when `last_output is not
+    _NO_UPSTREAM`; on a start node it left the client's `state` key
+    untouched, so `score >= 0.8` evaluated `True` purely from client-
+    supplied data. Fixed: the walk explicitly pops any client-declared
+    `state` on this branch, so the result must be
+    `reason="no-upstream-output"`/`result is None`, never `reason="ok"`/
+    `result is True`."""
+    nodes = [
+        Node(id="n_cond", type=NodeType.CONDITION, params={"state": {"score": 0.99}}),
+        Node(id="n_end", type=NodeType.END, params={}),
+    ]
+    edges = [Edge(from_="n_cond", to="n_end", when="score >= 0.8")]
+    recipe = _recipe(nodes, edges)
+    writer = _RecordingTraceWriter()
+    result = await _run(recipe, kb_search=EmptyKbSearch(), llm=FixtureLLM("smoke-01"), writer=writer)
+
+    cond_output = result.final_state["n_cond"]
+    assert isinstance(cond_output, dict)
+    assert cond_output["reason"] == "no-upstream-output"
+    assert cond_output["result"] is None
+
+
 # --------------------------------------------------------------------------
 # T11 (F8): 2 consecutive `condition` nodes — the 2nd's `state` is the 1st's
 # OWN output dict, not the walk's original upstream (`llm-step`) output.

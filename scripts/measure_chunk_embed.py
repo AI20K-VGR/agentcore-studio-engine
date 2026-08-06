@@ -229,8 +229,15 @@ def _embedder(dim: int) -> Embedder:
     return lambda text: derive(text, dim)
 
 
-def sweep(cases: Sequence[dict[str, Any]]) -> None:
-    print(f"corpus: packages/kb/docs/callisto/ · golden: {GOLDEN} · {len(cases)} case dương\n")
+def sweep(cases: Sequence[dict[str, Any]], golden: str = GOLDEN) -> None:
+    """`golden` is the ACTUAL golden identifier resolved for this run
+    (`args.golden` from `main()`), never the module constant `GOLDEN` — a
+    `--golden smoke-5.yaml` run must print "golden: smoke-5.yaml" in the
+    header, not the default's name (D14 #96 review I-2: the printed
+    provenance must match the data actually measured, since this output
+    gets pasted straight into the design-note as evidence). The default
+    keeps the module constant so the no-args call site is unchanged."""
+    print(f"corpus: packages/kb/docs/callisto/ · golden: {golden} · {len(cases)} case dương\n")
     for gname, cutter in GRANULARITY.items():
         rows = load_corpus(cutter)
         tokens = {t for _c, text, _t, _r in rows for t in text.lower().split()}
@@ -344,14 +351,20 @@ SERVICES: dict[str, ServiceEntry] = {
 DEFAULT_IMPLS: tuple[str, ...] = ("kb-derive", "bow-256")
 
 
-def service_grid(cases: Sequence[dict[str, Any]], impl_keys: Sequence[str] = DEFAULT_IMPLS) -> None:
+def service_grid(
+    cases: Sequence[dict[str, Any]], impl_keys: Sequence[str] = DEFAULT_IMPLS, golden: str = GOLDEN
+) -> None:
     """Bảng cách cắt × impl `EmbeddingService` — dùng lại `score()`/`GRANULARITY` đang có,
     KHÔNG viết lại logic chấm (yêu cầu 4).
 
     `null-const` KHÔNG nằm trong `impl_keys` mặc định — nó luôn in thành một hàng CONTROL
     riêng ở cuối mỗi cách cắt, để không lẫn với impl thật (R-6, T5).
+
+    `golden` (D14 #96 review I-2/S-1): trước bản vá này header không in golden nào cả, nên
+    một lần `--grid` chạy với `--golden` khác mặc định không phân biệt được với lần chạy
+    mặc định — in luôn nhãn golden thật đã resolve để output tự đủ bằng chứng.
     """
-    print(f"corpus: packages/kb/docs/callisto/ · {len(cases)} case dương\n")
+    print(f"corpus: packages/kb/docs/callisto/ · golden: {golden} · {len(cases)} case dương\n")
     for gname, cutter in GRANULARITY.items():
         rows = load_corpus(cutter)
         print(f"=== cắt = {gname} · {len(rows)} hàng ===")
@@ -393,12 +406,12 @@ def main() -> None:
     args = _build_parser().parse_args()
     cases = load_cases(args.golden)
     if args.grid:
-        service_grid(cases, tuple(args.impl) if args.impl else DEFAULT_IMPLS)
+        service_grid(cases, tuple(args.impl) if args.impl else DEFAULT_IMPLS, golden=args.golden)
         return
     if args.null:
         null_control(cases)
         return
-    sweep(cases)
+    sweep(cases, golden=args.golden)
     print()
     null_control(cases)
 

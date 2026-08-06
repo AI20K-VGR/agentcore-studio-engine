@@ -405,9 +405,22 @@ class ConditionExecutor:
         literal = _parse_literal(match.group("value"))
         try:
             outcome = _OPS[op](raw_state[field], literal)
-        except TypeError:
+            result = bool(outcome)
+        except Exception:
+            # Broad on purpose (D14 #96 review C-1): both the comparison AND
+            # the `bool()` coercion below it can raise. A plain `TypeError`
+            # covers the common int-vs-str case, but `Edge.when`'s literal
+            # and `state`'s values are both client-declared /
+            # composition-root-supplied data whose types are not statically
+            # known — a custom `__gt__`/`__eq__`/`__bool__` can raise
+            # anything (e.g. `ValueError`, or a numpy array making `bool()`
+            # itself ambiguous). This module's own "NEVER raises" contract
+            # (docstring above) means every failure mode here — not just
+            # `TypeError` — must fail closed into `reason="type-mismatch"`,
+            # never escape to `interpreter.py`'s dispatch call (no
+            # try/except there, by design — R-4).
             return _condition_result(when, None, "type-mismatch")
-        return _condition_result(when, bool(outcome), "ok")
+        return _condition_result(when, result, "ok")
 
 
 @runtime_checkable

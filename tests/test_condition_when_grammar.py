@@ -194,6 +194,77 @@ async def test_when_echo_is_truncated_in_output() -> None:
     assert len(result["when"]) == 200
 
 
+class _RaisesOnCompare:
+    """Test-local double (D14 #96 review C-1): a `state` value whose own
+    comparison dunders raise something OTHER than `TypeError` — the
+    reviewer's repro used exactly this shape (e.g. a numpy array or a
+    hostile client-declared object). `_OPS["<"]`/`">="`/etc. dispatch to
+    Python's rich comparison protocol, which calls these dunders directly;
+    a narrow `except TypeError` around the comparison would not catch this,
+    and `bool()` on the actual outcome is a second, separate place the same
+    class of failure can surface."""
+
+    def __gt__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+    def __ge__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+    def __lt__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+    def __le__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+    def __eq__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+    def __ne__(self, other: object) -> bool:
+        raise ValueError("comparison exploded")
+
+
+async def test_condition_non_type_error_from_comparison_reports_type_mismatch() -> None:
+    """C-1 (D14 #96 final review), bug 2: a comparison dunder raising
+    `ValueError` (not `TypeError`) must still fail closed — `execute()`
+    must never let it escape, and must still report the same
+    `reason="type-mismatch"` label a client already expects from a
+    type/comparison failure."""
+    result = await _run({"when": "score >= 0.8", "state": {"score": _RaisesOnCompare()}})
+    assert result["result"] is None
+    assert result["reason"] == "type-mismatch"
+
+
+class _BoolBoom:
+    """`__bool__` itself raises — pins C-1 bug 1 specifically (`bool(outcome)`
+    was OUTSIDE the try block). The comparison dunder here succeeds and
+    returns this object (not a plain `bool`), so `_OPS[op](...)` does NOT
+    raise; only the subsequent `bool(outcome)` coercion does. A fix that
+    only widened the `except` around the comparison call (leaving `bool()`
+    outside the try) would still let this one escape."""
+
+    def __eq__(self, other: object) -> _BoolBoom:  # type: ignore[override]
+        # Deliberately non-`bool` return (real classes raising in `__bool__`,
+        # e.g. numpy arrays, do exactly this) — the whole point of this
+        # double is to make `_OPS["=="]` succeed while handing `bool()` a
+        # value it cannot coerce, so the override violates `object.__eq__`'s
+        # `-> bool` contract on purpose.
+        return self
+
+    def __hash__(self) -> int:
+        return id(self)
+
+    def __bool__(self) -> bool:
+        raise ValueError("bool() exploded")
+
+
+async def test_condition_bool_coercion_failure_reports_type_mismatch() -> None:
+    """C-1 (D14 #96 final review), bug 1: `bool(outcome)` raising must be
+    caught too, not just the comparison call itself."""
+    result = await _run({"when": "verdict == PASS", "state": {"verdict": _BoolBoom()}})
+    assert result["result"] is None
+    assert result["reason"] == "type-mismatch"
+
+
 async def test_result_is_bool_iff_reason_is_ok() -> None:
     """T19 — the single place the core invariant of requirement 2 is locked:
     `result` is a `bool` if and only if `reason == "ok"`."""
