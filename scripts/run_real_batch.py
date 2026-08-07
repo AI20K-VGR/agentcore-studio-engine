@@ -29,6 +29,7 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -159,11 +160,83 @@ async def _run() -> list[TraceEvent]:
     return result.events
 
 
+# ─────────────────────────────────── Phase 2: assertions trên output thật ───────────────────────────────────
+
+_CLOSED_NODE_TYPES = {
+    NodeType.KB_RETRIEVE,
+    NodeType.LLM_STEP,
+    NodeType.CONDITION,
+    NodeType.TOOL_CALL,
+    NodeType.HITL_PAUSE,
+    NodeType.END,
+}
+
+
+def _assert_schema(events: list[TraceEvent]) -> None:
+    """`trace-event.v0.md` (FROZEN D11): mọi field bắt buộc có mặt, `node_type` ∈ 6 giá trị
+    đóng, `ts` parse được bằng `datetime.fromisoformat`. `sys.exit(1)` + in rõ field sai nếu
+    fail — không âm thầm pass."""
+    for event in events:
+        if event.node_type not in _CLOSED_NODE_TYPES:
+            print(f"SCHEMA FAIL: event {event.event_id!r} node_type={event.node_type!r} ngoài 6 giá trị đóng")
+            sys.exit(1)
+        try:
+            datetime.fromisoformat(event.ts)
+        except ValueError:
+            print(f"SCHEMA FAIL: event {event.event_id!r} ts={event.ts!r} không parse được ISO-8601")
+            sys.exit(1)
+        if not event.inputs_hash:
+            print(f"SCHEMA FAIL: event {event.event_id!r} thiếu inputs_hash")
+            sys.exit(1)
+        if event.outputs is None:
+            print(f"SCHEMA FAIL: event {event.event_id!r} thiếu outputs")
+            sys.exit(1)
+    print("schema OK")
+
+
+def _assert_citations_c1(events: list[TraceEvent]) -> None:
+    """C-1 (`trace-citations.v0.md`): `citations is None` ngoài `llm-step`; trên `llm-step`,
+    `citations` không rỗng và mọi `chunk_id` trong đó thật sự tồn tại trong
+    `outputs["chunks"]` của event `kb-retrieve` liền trước (chuỗi tuyến tính của script này).
+    `sys.exit(1)` + in rõ field sai nếu fail."""
+    kb_chunk_ids: set[str] = set()
+    for event in events:
+        if event.node_type is NodeType.KB_RETRIEVE:
+            chunks = event.outputs.get("chunks", [])
+            if not isinstance(chunks, list):
+                chunks = []
+            kb_chunk_ids = {c["chunk_id"] for c in chunks if isinstance(c, dict) and "chunk_id" in c}
+            continue
+        if event.node_type is not NodeType.LLM_STEP:
+            if event.citations is not None:
+                print(
+                    f"C-1 FAIL: event {event.event_id!r} node_type={event.node_type!r} "
+                    f"mang citations={event.citations!r}, phải là None"
+                )
+                sys.exit(1)
+            continue
+        # node_type == LLM_STEP
+        if not event.citations:
+            print(f"C-1 FAIL: event {event.event_id!r} (llm-step) citations rỗng/None, phải có căn cứ thật")
+            sys.exit(1)
+        unknown = [cid for cid in event.citations if cid not in kb_chunk_ids]
+        if unknown:
+            print(
+                f"C-1 FAIL: event {event.event_id!r} (llm-step) citations={unknown!r} "
+                f"không khớp chunk_id nào trong kb-retrieve.outputs['chunks']={sorted(kb_chunk_ids)!r}"
+            )
+            sys.exit(1)
+    print("C-1 OK")
+
+
 def main() -> None:
     events = asyncio.run(_run())
     print(f"{len(events)} TraceEvent(s) từ batch thật (StaticKbSearch):\n")
     for event in events:
         print(json.dumps(event.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    print()
+    _assert_schema(events)
+    _assert_citations_c1(events)
 
 
 if __name__ == "__main__":
