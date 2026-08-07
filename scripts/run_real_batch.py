@@ -171,11 +171,26 @@ _CLOSED_NODE_TYPES = {
     NodeType.END,
 }
 
+# Chuỗi walk kỳ vọng CHÍNH XÁC cho DAG `_build_recipe()` dựng ở trên — 1 event/node, không
+# thiếu không trùng (`trace-event.v0.md` §4.2a: "thiếu một event ở giữa nguy hiểm hơn hỏng
+# hẳn"/"trùng cũng là sai"). Review D15 (I-1): trước bản vá này `_assert_schema`/
+# `_assert_citations_c1` chỉ lặp trên TỪNG event có sẵn — một `events=[]` (interpreter thoái
+# hoá, 0 event) hoặc walk bị cắt/trùng vẫn in "OK" vì vòng lặp rỗng/thiếu case không có gì để
+# fail. Check này chặn TẬP event trước khi soi từng event.
+_EXPECTED_WALK: tuple[NodeType, ...] = (NodeType.KB_RETRIEVE, NodeType.LLM_STEP, NodeType.CONDITION, NodeType.END)
+
 
 def _assert_schema(events: list[TraceEvent]) -> None:
-    """`trace-event.v0.md` (FROZEN D11): mọi field bắt buộc có mặt, `node_type` ∈ 6 giá trị
-    đóng, `ts` parse được bằng `datetime.fromisoformat`. `sys.exit(1)` + in rõ field sai nếu
-    fail — không âm thầm pass."""
+    """`trace-event.v0.md` (FROZEN D11): đúng walk kỳ vọng (I-1, không thiếu/trùng node), mọi
+    field bắt buộc có mặt, `node_type` ∈ 6 giá trị đóng, `ts` parse được bằng
+    `datetime.fromisoformat`. `sys.exit(1)` + in rõ field sai nếu fail — không âm thầm pass."""
+    actual_walk = tuple(event.node_type for event in events)
+    if actual_walk != _EXPECTED_WALK:
+        print(
+            f"SCHEMA FAIL: walk={[nt.value for nt in actual_walk]!r}, kỳ vọng đúng "
+            f"{[nt.value for nt in _EXPECTED_WALK]!r} (1 event/node, không thiếu không trùng)"
+        )
+        sys.exit(1)
     for event in events:
         if event.node_type not in _CLOSED_NODE_TYPES:
             print(f"SCHEMA FAIL: event {event.event_id!r} node_type={event.node_type!r} ngoài 6 giá trị đóng")

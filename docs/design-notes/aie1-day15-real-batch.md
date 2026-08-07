@@ -31,9 +31,11 @@ truy xuất được (đọc từ prompt), không phải fixture VCR cố địn
 
 - **4 `TraceEvent`** — đúng 1/node, thứ tự `kb-retrieve -> llm-step -> condition -> end`.
 - `kb-retrieve` (`n_kb`) trả **5 chunk thật** từ `StaticKbSearch` (query
-  `"Nhân viên xin nghỉ phép cần báo trước bao lâu?"`, tenant `ankor`, `section_roles=["public"]`):
-  `ankor-leave-001#c1`, `#c3`, `#c2`, `ankor-onboarding-001#c2`, `ankor-holidays-001#c3` —
-  **không phải** `"chunk-042"` của `FixtureKbSearch` cũ, chứng minh đang chạy trên data thật.
+  `"Nhân viên xin nghỉ phép cần báo trước bao lâu?"`, tenant `ankor`, `section_roles=["public"]`),
+  đúng thứ tự xếp hạng tất định (3/3 lần chạy giống hệt, `score` giảm dần rồi `chunk_id` làm
+  khoá phụ — `static_search.py:99-101`): `ankor-leave-001#c1`, `ankor-leave-001#c3`,
+  `ankor-onboarding-001#c2`, `ankor-holidays-001#c3`, `ankor-leave-001#c2` — **không phải**
+  `"chunk-042"` của `FixtureKbSearch` cũ, chứng minh đang chạy trên data thật.
 - `llm-step` (`n_llm`) cite lại đúng cả 5 chunk_id đó (`_CitingLLM` echo mọi chunk_id có trong
   prompt) — `refused=False`, `citations` khớp `outputs["chunks"]` của `kb-retrieve` liền trước.
 - `condition` (`n_cond`) đọc `refused == false` từ output `llm-step` thật, `result=True`,
@@ -48,8 +50,9 @@ Trước khi khoá assertion, chạy thử với 3 case cố ý sai (throwaway p
 `interpreter.py` per D-3):
 
 1. Gán `citations=["fake-chunk-id"]` cho event `condition` (không phải `llm-step`) →
-   `_assert_citations_c1` bắt đúng: `"C-1 FAIL: ... node_type=condition mang citations=[...],
-   phải là None"`, `sys.exit(1)`.
+   `_assert_citations_c1` bắt đúng (message verbatim): `"C-1 FAIL: event '<id>'
+   node_type=<NodeType.CONDITION: 'condition'> mang citations=['fake-chunk-id'], phải là
+   None"`, `sys.exit(1)`.
 2. Gán `citations=["not-a-real-chunk-id"]` cho event `llm-step` (chunk_id không tồn tại trong
    `kb-retrieve.outputs["chunks"]`) → bắt đúng: `"C-1 FAIL: ... không khớp chunk_id nào trong
    kb-retrieve.outputs['chunks']=[...]"`, `sys.exit(1)`.
@@ -60,12 +63,25 @@ Cả 3 case đều exit code 1 đúng như kỳ vọng; chạy lại trên event
 assertion PASS (`"schema OK"`/`"C-1 OK"`). Assertion đã được nhìn thấy đỏ ít nhất 1 lần trước
 khi khoá — không phải "viết-cho-có".
 
+**Review D15 (I-1)** phát hiện thêm 1 lỗ: cả hai hàm ban đầu chỉ lặp trên TỪNG event có sẵn,
+mù với sự vắng mặt của cả **tập** — `events=[]`, walk bị cắt (thiếu `llm-step`), trùng node,
+hoặc sai thứ tự đều lọt qua và in "OK" (đúng chế độ hỏng `trace-event.v0.md` §4.2a cảnh báo:
+"thiếu một event ở giữa nguy hiểm hơn hỏng hẳn", "trùng cũng là sai"). Vá bằng
+`_EXPECTED_WALK` — so khớp tuple `node_type` thật với chuỗi kỳ vọng
+`(kb-retrieve, llm-step, condition, end)` TRƯỚC vòng lặp per-event. Probe lại 4 case (rỗng,
+thiếu `llm-step`, trùng `llm-step`, sai thứ tự) — cả 4 bị `SCHEMA FAIL` + `sys.exit(1)` đúng
+như kỳ vọng; events thật vẫn `schema OK`.
+
 ## Kết luận
 
-- 6 executor + interpreter D14 chạy đúng khi ghép với KB thật (`StaticKbSearch`, không phải
-  double test-local) — DoD #101 "6 executor chạy trong batch ghép thật" đã có bằng chứng thật.
-- Trace đúng schema `trace-event.v0.md`: `node_type` ∈ 6 giá trị đóng, `ts` parse được,
-  `inputs_hash`/`outputs` có mặt mọi event.
+- **4/6 node type** (`kb-retrieve`, `llm-step`, `condition`, `end`) dispatch đúng qua
+  `interpreter.run()` khi ghép với KB thật (`StaticKbSearch`, không phải double test-local) —
+  batch này KHÔNG dựng `tool-call`/`hitl-pause` (recipe của script chỉ 4 node, cùng hình D14's
+  `test_condition_dag_e2e.py`). Bằng chứng "6 executor" đầy đủ (gồm `tool-call`/`hitl-pause`)
+  vẫn là D14's grid harness với double test-local, không phải batch KB-thật hôm nay — số đo ở
+  đây thu hẹp DoD #101 xuống đúng phạm vi đã chạy: 4 node type, KB thật.
+- Trace đúng schema `trace-event.v0.md`: walk đúng chuỗi kỳ vọng (không thiếu/trùng node, I-1),
+  `node_type` ∈ 6 giá trị đóng, `ts` parse được, `inputs_hash`/`outputs` có mặt mọi event.
 - Citations đúng C-1: chỉ `llm-step` mang `citations`, nguồn grounded thật từ chunk `kb-retrieve`
   vừa truy xuất — không phải marker rỗng, không phải chunk giả.
 
@@ -83,3 +99,10 @@ khi khoá — không phải "viết-cho-có".
 3. **`_CitingLLM` là double, không phải gateway LLM thật** — nó trích lại chunk_id có sẵn trong
    prompt, không tự suy luận câu trả lời. Đủ để chứng minh threading citations đúng seam, không
    chứng minh chất lượng câu trả lời của một model thật.
+4. **`section_roles` đến từ recipe (`node.params`), không từ session** — `interpreter.run()`
+   chỉ inject `tenant_id` server-side vào `kb-retrieve` (INV-1 Tenant-Wall); `section_roles`
+   script này khai tay trong `_build_recipe()` (`["public"]`), giống mọi recipe D14 hiện có.
+   Đây không phải hoãn-tuỳ-ý — đã có món nợ mở với ID: `docs/backlog.yaml`
+   **FENCE-SEAM-1** (P1, debt) — "the real KbSearch impl (Day 4/5) must resolve
+   `section_roles` server-side, not trust `node.params`, to avoid T6 label-spoof". Script
+   này không đóng món nợ đó, chỉ tái xác nhận nó còn mở.
