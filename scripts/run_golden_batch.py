@@ -110,7 +110,17 @@ class _GoldenAwareLLM:
     trả lời trích ĐÚNG giao `bracket_ids ∩ expected_citation` — giao rỗng (case refusal, hoặc
     case dương nhưng fence đã lọc mất chunk kỳ vọng) thì trả câu không trích gì (không ngoặc
     vuông nào), để `LlmStepExecutor` tự suy `citations=[]`/`refused=True` qua logic thật của
-    nó (`executors.py:253-266`) — double này KHÔNG tự gán `refused`."""
+    nó (`executors.py:253-266`) — double này KHÔNG tự gán `refused`.
+
+    ⚠️ Giới hạn đã biết (review D16 W1): cho 8 case refusal, `expected_citation=[]` ⇒
+    `self._expected` rỗng ⇒ `cite_ids` LUÔN rỗng, BẤT KỂ `StaticKbSearch` có thật sự trả về
+    chunk nào hay không (probe review: cả 8/8 case refusal đều retrieve non-empty). Đường
+    refusal vì vậy KHÔNG khả-phủ-chứng bằng double này — nó chứng minh double trung thực
+    (không bịa citation), KHÔNG chứng minh fence/leak-filtering của `StaticKbSearch` đúng
+    trên các case đó. `30/30 khớp nhãn` là bằng chứng ĐÚNG cho 22 case dương (retrieval thật
+    phải tìm đúng chunk); với 8 case refusal nó chỉ xác nhận nhãn golden tự nhất quán với
+    double, không phải bằng chứng độc lập cho hành vi fence. Test fence/leak-detection thật
+    (nếu cần) ngoài scope AIE-1 hôm nay (`DEC-D16-06`, LLM-judge/match_mode hoãn D18)."""
 
     def __init__(self, expected_citation: list[str]) -> None:
         self._expected = set(expected_citation)
@@ -223,6 +233,19 @@ def run_all_cases() -> list[CaseOutcome]:
 def main() -> None:
     cases = {c.case_id: c for c in load_golden_cases()}
     outcomes = run_all_cases()
+    # Khoá TẬP trước khi soi từng case (review D16 W2, cùng lý do I-1 của D15
+    # `run_real_batch.py:180`): một `outcomes` bị cắt/thiếu vẫn khiến vòng lặp bên dưới chạy
+    # "sạch" trên tập rỗng-tương-đối rồi in `N/N` (N nhỏ hơn 30) như thể mọi thứ đều khớp.
+    outcome_ids = {o.case_id for o in outcomes}
+    if outcome_ids != set(cases):
+        missing = sorted(set(cases) - outcome_ids)
+        extra = sorted(outcome_ids - set(cases))
+        print(
+            f"FAIL: outcomes ({len(outcomes)}) không khớp tập case_id kỳ vọng "
+            f"({len(cases)}) — missing={missing!r}, extra={extra!r}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     ok = True
     for outcome in outcomes:
         case = cases[outcome.case_id]

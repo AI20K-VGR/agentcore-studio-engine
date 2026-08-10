@@ -33,10 +33,14 @@ _RUN_GOLDEN_BATCH_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_
 
 
 def _load_run_golden_batch() -> Any:
-    spec = importlib.util.spec_from_file_location("run_golden_batch", _RUN_GOLDEN_BATCH_PATH)
+    # Module key riêng cho file test này (review D16 W3, đối xứng với
+    # `test_golden_batch_correctness.py::_load_run_golden_batch`): dùng chung khoá
+    # `sys.modules["run_golden_batch"]` giữa 2 file sẽ khiến file nạp sau ghi đè entry của file
+    # nạp trước — đúng ngược lại điều docstring module này khẳng định (tránh rò `sys.modules`).
+    spec = importlib.util.spec_from_file_location("run_golden_batch_determinism_view", _RUN_GOLDEN_BATCH_PATH)
     assert spec is not None and spec.loader is not None, f"không nạp được {_RUN_GOLDEN_BATCH_PATH}"
     module = importlib.util.module_from_spec(spec)
-    sys.modules["run_golden_batch"] = module
+    sys.modules["run_golden_batch_determinism_view"] = module
     spec.loader.exec_module(module)
     return module
 

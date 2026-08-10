@@ -32,10 +32,14 @@ _RUN_GOLDEN_BATCH_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_
 
 
 def _load_run_golden_batch() -> Any:
-    spec = importlib.util.spec_from_file_location("run_golden_batch", _RUN_GOLDEN_BATCH_PATH)
+    # Module key riêng cho file test này (review D16 W3): cả 2 file test nạp cùng
+    # `run_golden_batch.py` qua `importlib` độc lập — khoá `sys.modules` PHẢI khác nhau, nếu
+    # không file nạp sau sẽ ghi đè entry của file nạp trước (`sys.modules["run_golden_batch"]`),
+    # đúng ngược lại thứ 2 file đang tự nhận là tránh (rò trạng thái `sys.modules` giữa 2 file).
+    spec = importlib.util.spec_from_file_location("run_golden_batch_correctness_view", _RUN_GOLDEN_BATCH_PATH)
     assert spec is not None and spec.loader is not None, f"không nạp được {_RUN_GOLDEN_BATCH_PATH}"
     module = importlib.util.module_from_spec(spec)
-    sys.modules["run_golden_batch"] = module
+    sys.modules["run_golden_batch_correctness_view"] = module
     spec.loader.exec_module(module)
     return module
 
