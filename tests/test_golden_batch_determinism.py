@@ -174,9 +174,7 @@ def test_batch_positive_negative_split_matches_golden() -> None:
         assert len(positive_case_ids) == _EXPECTED_POSITIVE_COUNT
         assert len(refusal_case_ids) == _EXPECTED_REFUSAL_COUNT
 
-        non_empty_citation_count = sum(
-            1 for case_id in positive_case_ids if outcomes_by_case[case_id].citations != []
-        )
+        non_empty_citation_count = sum(1 for case_id in positive_case_ids if outcomes_by_case[case_id].citations != [])
         empty_citation_count = sum(1 for case_id in refusal_case_ids if outcomes_by_case[case_id].citations == [])
         assert non_empty_citation_count == _EXPECTED_POSITIVE_COUNT, (
             f"kỳ vọng {_EXPECTED_POSITIVE_COUNT} case dương có citations, thực tế {non_empty_citation_count}"
