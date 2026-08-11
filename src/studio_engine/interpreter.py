@@ -380,9 +380,21 @@ async def run(
             last_kb_query = node.params.get("query", "")
 
         if isinstance(output, list):
-            outputs: dict[str, object] = {
-                "chunks": [item.model_dump(mode="json") for item in output if isinstance(item, KbSearchResultItem)]
-            }
+            chunks = [item.model_dump(mode="json") for item in output if isinstance(item, KbSearchResultItem)]
+            outputs: dict[str, object] = {"chunks": chunks}
+            if node_type is NodeType.KB_RETRIEVE and not chunks:
+                # Audit (#111): `[]` từ `kb.search` nghĩa CHÍNH XÁC là "không có gì trong
+                # phạm vi" — hàng rào đã lọc sạch (`kb-search.v0.md` §6.1/§6.1a). Ca "trong
+                # phạm vi nhưng không có đáp án" trả về list KHÁC rỗng, nên không bao giờ
+                # rơi vào nhánh này. Không có cờ này, người đọc trace thấy `chunks: []` mà
+                # không biết là bị chặn hay là không tìm được.
+                #
+                # Đọc đúng chữ: cờ này nói "KHÔNG CÓ CHUNK HỢP LỆ NÀO trong event", không
+                # nói "hàng rào vừa chặn một thứ cụ thể". `chunks` cũng rỗng khi `kb.search`
+                # trả về phần tử sai kiểu (bị `isinstance(item, KbSearchResultItem)` lọc
+                # hết) — một lỗi serialize sẽ hiện ra ở đây y hệt một ca fence. Đừng đọc
+                # `fenced: true` như một sự kiện bảo mật đơn lẻ; nó là "0 chunk hợp lệ".
+                outputs["fenced"] = True
             tokens = Tokens(prompt=0, completion=0)
             citations = None
         else:
