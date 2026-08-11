@@ -32,11 +32,17 @@ the first place — which is why `session_context` is a **mandatory**
 keyword-only parameter on `run()` (no default), not an optional override a
 caller could omit and fall back to trusting the recipe.
 
-3 members are declared even though only `tenant_id` has a consumer today:
-`user`/`roles` exist to match `ResolvedContext`'s shape (so the structural
-match holds now, not just once a consumer lands) and for Sprint 3's
-`section_role` filter — same precedent as Day 7 threading `agent_config.model`
-before any executor read it.
+3 members are declared; as of Day 17 (plan `260811-1121-d17-aie1-section-roles-
+server-resolve`) BOTH `tenant_id` and `roles` have a real consumer —
+`interpreter.run()`'s `NodeType.KB_RETRIEVE` branch overwrites
+`node.params["section_roles"]` with `roles` in the same override that already
+used `tenant_id` (Day 8 INV-1), the T6 label-spoof fence. A caller building
+this Protocol (directly, or via `apps/studio`'s composition root once
+`resolve_section_roles`, #112, lands) must supply the SESSION's real roles:
+`roles=[]` is no longer an inert placeholder, it is silent deny-all at
+retrieval. `user` remains the one member with no consumer yet — kept only to
+match `ResolvedContext`'s shape, same precedent as Day 7 threading
+`agent_config.model` before any executor read it.
 """
 
 from __future__ import annotations
