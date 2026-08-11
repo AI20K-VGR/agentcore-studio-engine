@@ -88,12 +88,22 @@ class KbRetrieveExecutor:
     """`kb-retrieve` node — fence-EXECUTOR (R-SPEC A3, AIE-1's own layer of
     the 3-layer fence: Tenant-Wall=SWE, fence-DATA=DE, fence-EXECUTOR=AIE-1).
 
-    Contract the real `execute()` body MUST honor:
-    - `section_roles` MUST be resolved server-side (from the run's
-      session/tenant context) and passed into `KbSearch.search(...)`
-      UNCHANGED — a client-declared `section_roles` override must be
-      ignored. Accepting a client override here is exactly the T6
-      label-spoof this fence exists to stop.
+    Contract the real `execute()` body honors (as of Day 17, plan
+    `260811-1121-d17-aie1-section-roles-server-resolve`, phase 1):
+    - `section_roles` IS resolved server-side and passed into
+      `KbSearch.search(...)` — but NOT by this class. `interpreter.run()`
+      (`interpreter.py`, in the `NodeType.KB_RETRIEVE` branch) overwrites
+      `node.params["section_roles"]` with `session_context.roles` BEFORE
+      dispatching to this executor, the same pattern it already used for
+      `tenant_id`. By the time `execute()` below reads
+      `node.params.get("section_roles", ...)`, a client-declared override
+      has already been discarded upstream — this class's own read is
+      unconditional (see its docstring below) and relies entirely on that
+      upstream override for the T6 fence. A client-declared `section_roles`
+      therefore never reaches `KbSearch.search(...)` through the real
+      `interpreter.run()` walk; it can only be observed by constructing and
+      calling this executor DIRECTLY, bypassing the session fence (defense-
+      in-depth boundary, still fails closed — see `execute()`'s docstring).
     - The executor must NEVER retrieve unfiltered/over-scoped chunks and
       then filter them post-hoc via the LLM. That is the umbrella-contract's
       explicitly forbidden anti-pattern ("nhờ LLM đừng nói" — fake fence).
@@ -120,20 +130,37 @@ class KbRetrieveExecutor:
         """Output shape (v0 stub): the raw `list[KbSearchResultItem]` from
         `KbSearch.search(...)`, passed through unchanged — no post-hoc
         filtering/widening on this side (fence-EXECUTOR duty above). `query`/
-        `section_roles`/`top_k` are read as-given from `node.params`.
-        `tenant_id` is the one field this executor does NOT trust as-given
-        (Day 8, INV-1): `interpreter.run()` (post Phase 1) always injects a
-        real `UUID` sourced from `session_context.tenant_id` before dispatch
-        — server-resolved, never client-declared. A missing or malformed
-        `tenant_id` (absent, or a slug string) means SOMETHING upstream
-        skipped that injection, so this executor fails closed with
-        `PermissionError` rather than making up a value: the earlier nil-UUID
-        sentinel fallback was fail-closed only by luck (0 rows happened to
-        match), not by contract, and a wiring bug behind it would read
-        indistinguishably from "this tenant has no chunks". This is
-        defense-in-depth — normal dispatch through `interpreter.run()` never
-        reaches the raise; it only fires if this executor is constructed and
-        called directly, bypassing the session fence."""
+        `top_k` are read as-given from `node.params`; `[]` when
+        `section_roles` is absent/malformed is `[]` deny-all, not a
+        wildcard — there is no `PermissionError` branch for it the way there
+        is for `tenant_id` below, because unlike a missing tenant identity
+        (which has no safe fallback value), a missing/malformed
+        `section_roles` already reads as "no chunk role matches" at
+        retrieval (`static_search.py`: `allowed = set(section_roles)`, empty
+        set matches nothing).
+
+        Neither `tenant_id` NOR `section_roles` is trusted as-given from
+        `node.params` in the real walk (Day 8 INV-1 / Day 17 T6):
+        `interpreter.run()` (`interpreter.py`, `NodeType.KB_RETRIEVE` branch)
+        always overwrites both with `session_context.tenant_id`/
+        `session_context.roles` before dispatch — server-resolved, never
+        client-declared. This executor's own reads below (`node.params.get(
+        "tenant_id")`, `node.params.get("section_roles", [])`) are exactly
+        as-given from whatever `node.params` it is handed; the fence is
+        entirely in `interpreter.run()`'s override, not here.
+        `tenant_id` additionally fails closed with `PermissionError` when the
+        post-override value still isn't a real `UUID` (absent, or a slug
+        string) — SOMETHING upstream skipped the injection, so this executor
+        refuses to make up a value: the earlier nil-UUID sentinel fallback
+        was fail-closed only by luck (0 rows happened to match), not by
+        contract, and a wiring bug behind it would read indistinguishably
+        from "this tenant has no chunks". This is defense-in-depth — normal
+        dispatch through `interpreter.run()` never reaches the raise; it
+        only fires if this executor is constructed and called directly,
+        bypassing the session fence. `section_roles` has no equivalent raise
+        (QĐ-7, plan `260811-1121-d17`): `[]` is already the correct
+        fail-closed value, so a raise here would be cargo-cult, not a real
+        gap."""
         raw_query = node.params.get("query", "")
         raw_tenant_id = node.params.get("tenant_id")
         raw_roles = node.params.get("section_roles", [])

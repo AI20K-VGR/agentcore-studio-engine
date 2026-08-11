@@ -17,6 +17,7 @@ from studio_contracts import (
     Dag,
     Edge,
     KbBinding,
+    KbSearch,
     Node,
     NodeType,
     Recipe,
@@ -25,6 +26,7 @@ from studio_contracts import (
 )
 from studio_engine import interpreter
 from studio_engine.demo_stubs import EmptyEmbedding, EmptyKbSearch, FixtureLLM
+from test_kb_retrieve_llm_step_threading import FixtureKbSearch
 from test_session_context_tenant_wall import default_session_context
 
 _TOOL_NAME = "search_docs"
@@ -68,11 +70,11 @@ def _four_node_recipe() -> Recipe:
     )
 
 
-async def _run(writer: _RecordingTraceWriter) -> interpreter.RunResult:
+async def _run(writer: _RecordingTraceWriter, kb_search: KbSearch | None = None) -> interpreter.RunResult:
     return await interpreter.run(
         _four_node_recipe(),
         session_context=default_session_context(),
-        kb_search=EmptyKbSearch(),
+        kb_search=kb_search or EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),
         trace_writer=writer,
@@ -180,7 +182,55 @@ async def test_kb_retrieve_event_outputs_wraps_raw_list_in_dict() -> None:
     result = await _run(writer)
 
     kb_event = next(e for e in result.events if e.node_id == "n_kb")
-    assert kb_event.outputs == {"chunks": []}
+    assert kb_event.outputs == {"chunks": [], "fenced": True}
+
+
+async def test_kb_retrieve_event_has_no_fenced_key_when_chunks_present() -> None:
+    """0 chunk hợp lệ → `fenced: True` (test ở trên). Ngược lại — có ít nhất
+    1 chunk thật — key `fenced` phải VẮNG MẶT, không phải `False`: additive
+    tối thiểu (`docs/code-standards.md` §6), consumer đọc bằng `.get("fenced")`.
+    Chặn một impl gắn `fenced` VÔ ĐIỀU KIỆN (impl như vậy vẫn làm test rỗng ở
+    trên xanh, nhưng làm test này đỏ)."""
+    writer = _RecordingTraceWriter()
+    result = await _run(writer, kb_search=FixtureKbSearch())
+
+    kb_event = next(e for e in result.events if e.node_id == "n_kb")
+    chunks = kb_event.outputs["chunks"]
+    assert isinstance(chunks, list)
+    assert len(chunks) == 1
+    assert "fenced" not in kb_event.outputs
+
+
+class _ListReturningToolDispatch:
+    """Một `ToolDispatch` trả về LIST rỗng. Không phải kịch bản bịa:
+    `ToolCallExecutor.execute` trả THẲNG giá trị của `dispatcher.dispatch()`
+    (`executors.py:466`), mà `ToolDispatch` là seam NGOÀI — tool do người
+    khác viết, trả list là chuyện bình thường (cùng lập luận
+    `_CitationForgingToolDispatch`, `:123-130`)."""
+
+    def __init__(self, whitelist: list[str]) -> None:
+        self._whitelist = whitelist
+
+    async def dispatch(self, tool: str) -> object:
+        del tool
+        return []
+
+
+async def test_list_returning_tool_call_event_never_carries_fenced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test có răng cho cổng `node_type` (KHÔNG theo hình dạng output).
+    Node `tool-call` cũng có thể đi vào nhánh `isinstance(output, list)` khi
+    dispatch trả list — nếu enrichment suy `fenced` từ hình dạng `output`
+    thay vì `node_type is NodeType.KB_RETRIEVE`, event `tool-call` này sẽ
+    mang một bản ghi hàng-rào GIẢ trong audit trail, dù nó chưa từng gọi
+    `kb.search`. Đúng lớp lỗi C-1 (`interpreter.py:392-401`)."""
+    monkeypatch.setattr(interpreter, "WhitelistToolDispatch", _ListReturningToolDispatch)
+    writer = _RecordingTraceWriter()
+
+    result = await _run(writer)
+
+    by_type = {e.node_type: e for e in result.events}
+    assert by_type[NodeType.TOOL_CALL].outputs == {"chunks": []}
+    assert "fenced" not in by_type[NodeType.TOOL_CALL].outputs
 
 
 async def test_all_event_outputs_are_json_serializable() -> None:

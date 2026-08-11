@@ -69,9 +69,18 @@ Test: `uv run --package agentcore-studio-engine pytest packages/engine/tests/tes
    tuyến để đối chiếu nhãn. Bằng chứng đủ 6 executor vẫn là D14's grid harness.
 4. **Kế thừa nguyên các giới hạn của D15** (`aie1-day15-real-batch.md` §Giới hạn) không đổi ở D16:
    `StaticKbSearch` không phải Postgres/RLS thật; `_GoldenAwareLLM` là double trích lại, không phải
-   gateway LLM thật; `section_roles` đến từ recipe (`_build_recipe`), không từ session — nợ mở
-   `docs/backlog.yaml` **FENCE-SEAM-1** vẫn còn nguyên, D16 không đóng nợ đó, chỉ tái xác nhận nó
-   còn mở trên quy mô N=30 thay vì N=1.
+   gateway LLM thật.
+   [SUPERSEDED bởi D17, plan `260811-1121-d17-aie1-section-roles-server-resolve`] Dòng gốc ở đây nói
+   *"`section_roles` đến từ recipe (`_build_recipe`), không từ session — nợ mở `docs/backlog.yaml`
+   FENCE-SEAM-1 vẫn còn nguyên"* — đúng cho D16, KHÔNG còn đúng từ D17: `interpreter.run()` giờ ghi
+   đè `section_roles` bằng `session_context.roles` (T6 label-spoof fix, xem
+   `aie1-day15-real-batch.md` §Giới hạn điểm 4 cho chi tiết cơ chế). `run_golden_batch.py` đã vá
+   tương ứng — `roles=list(case.section_roles)` trên `session_context` (`:218`), khớp
+   `section_roles` node vẫn khai trong `_build_recipe()` — 30/30 case vẫn khớp nhãn, nhưng vì phiên
+   khai đúng vai chứ không còn do engine đọc thẳng từ recipe. Cũng lưu ý: **`docs/backlog.yaml`
+   chưa từng tồn tại** trong repo con này (không phải file đã xoá) — tham chiếu ID `FENCE-SEAM-1` ở
+   đây luôn là một con trỏ treo, độc lập với D17. Phần AIE-1 của nợ FENCE-SEAM-1 đã đóng ở D17;
+   resolver thật (`resolve_section_roles`, #112, SWE) vẫn mở.
 5. **Golden-set là input READ-only** — `callisto-handbook-30-draft.yaml` (PR #18 kb đổi tên thành
    `callisto-golden-30-v1.yaml`, chưa merge tại thời điểm đo, nội dung 30 case không đổi) — script
    đọc path qua 1 hằng số `_GOLDEN_SET_PATH` duy nhất, dễ đổi nếu tên file đổi trước khi merge.

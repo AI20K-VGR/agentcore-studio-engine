@@ -99,10 +99,14 @@ như kỳ vọng; events thật vẫn `schema OK`.
 3. **`_CitingLLM` là double, không phải gateway LLM thật** — nó trích lại chunk_id có sẵn trong
    prompt, không tự suy luận câu trả lời. Đủ để chứng minh threading citations đúng seam, không
    chứng minh chất lượng câu trả lời của một model thật.
-4. **`section_roles` đến từ recipe (`node.params`), không từ session** — `interpreter.run()`
-   chỉ inject `tenant_id` server-side vào `kb-retrieve` (INV-1 Tenant-Wall); `section_roles`
-   script này khai tay trong `_build_recipe()` (`["public"]`), giống mọi recipe D14 hiện có.
-   Đây không phải hoãn-tuỳ-ý — đã có món nợ mở với ID: `docs/backlog.yaml`
-   **FENCE-SEAM-1** (P1, debt) — "the real KbSearch impl (Day 4/5) must resolve
-   `section_roles` server-side, not trust `node.params`, to avoid T6 label-spoof". Script
-   này không đóng món nợ đó, chỉ tái xác nhận nó còn mở.
+4. **[SUPERSEDED bởi D17, plan `260811-1121-d17-aie1-section-roles-server-resolve`]**
+   `section_roles` đến từ recipe (`node.params`), không từ session — đúng cho D15, KHÔNG còn
+   đúng từ D17: `interpreter.run()` giờ ghi đè `section_roles` bằng `session_context.roles`
+   trong CÙNG `model_copy` đã ghi đè `tenant_id` (Day 8 INV-1), gương đúng pattern cho cả
+   2 trường (`interpreter.py`, nhánh `NodeType.KB_RETRIEVE`). Script này (`run_real_batch.py`)
+   đã được vá tương ứng ở D17: `roles=["public"]` khai trên `session_context`, khớp
+   `section_roles=["public"]` node vẫn khai trong `_build_recipe()` — script còn hoạt động
+   đúng, nhưng vì lý do khác D15 (phiên phải khai đúng vai, engine không còn đọc từ recipe).
+   Món nợ **FENCE-SEAM-1** đã đóng phần AIE-1 (T6 label-spoof qua `interpreter.run()`); phần
+   còn lại (resolver thật `resolve_section_roles`, #112, SWE) vẫn mở — xem plan D17 §Out of
+   scope.
