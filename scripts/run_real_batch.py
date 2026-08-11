@@ -151,7 +151,12 @@ def _build_recipe() -> Recipe:
 async def _run() -> list[TraceEvent]:
     result = await interpreter.run(
         _build_recipe(),
-        session_context=_RealBatchSessionContext(tenant_id=ANKOR_ID, user="d15-real-batch", roles=[]),
+        # Day 17 (plan 260811-1121-d17): `interpreter.run()` now server-resolves
+        # `section_roles` from `session_context.roles`, so the session must declare
+        # the role this script's recipe actually needs (`kb_binding.scope="ankor/public"`
+        # above, `section_roles=["public"]` on the node) — the engine no longer reads
+        # scope from the recipe/node at all.
+        session_context=_RealBatchSessionContext(tenant_id=ANKOR_ID, user="d15-real-batch", roles=["public"]),
         kb_search=StaticKbSearch(),
         llm=_CitingLLM(),
         embedding=EmptyEmbedding(),

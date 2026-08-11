@@ -169,16 +169,21 @@ async def run(
     """Walk `recipe.dag` from its single start node, following `dag.edges`
     node-by-node, until an `end` node executes.
 
-    `session_context` (Day 8, INV-1 Tenant-Wall) is server-resolved caller
-    identity — mandatory, keyword-only, NO default, so no call site can
-    silently skip the fence. Every tenant identity this function emits (the
-    `kb-retrieve` node's injected `tenant_id` param, and every `TraceEvent`'s
-    `tenant_id`) comes from `session_context.tenant_id`, NEVER from the
-    recipe's own client-declared tenant field — a mismatch (client declares
-    one tenant, session resolves to another) is not an error, it is simply
-    ignored: the run proceeds scoped to the session's tenant. That recipe
-    field is client-supplied data (`studio_contracts.recipe.Recipe`, built by
-    workbench/client) and this function does not read it anywhere; see
+    `session_context` (Day 8, INV-1 Tenant-Wall; Day 17, T6 label-spoof) is
+    server-resolved caller identity AND scope — mandatory, keyword-only, NO
+    default, so no call site can silently skip the fence. Every tenant
+    identity AND `section_roles` scope this function emits (the
+    `kb-retrieve` node's injected `tenant_id`/`section_roles` params) comes
+    from `session_context.tenant_id`/`session_context.roles`, NEVER from the
+    recipe's own client-declared tenant/scope fields — a mismatch (client
+    declares one tenant or a wider scope, session resolves to another) is not
+    an error, it is simply ignored: the run proceeds scoped to the session's
+    tenant and roles. Every `TraceEvent`'s `tenant_id` likewise comes from
+    `session_context.tenant_id`. Those recipe fields (`Recipe.tenant_id`, and
+    `kb-retrieve`'s `params["section_roles"]` — built by workbench's
+    `_parse_kb_scope` from the client-declared `kb_binding.scope` string) are
+    client-supplied data (`studio_contracts.recipe.Recipe`, built by
+    workbench/client) and this function does not trust either of them; see
     `studio_engine.session` for why that is the actual fence, not merely a
     convention.
 
@@ -273,22 +278,54 @@ async def run(
         node = nodes_by_id[current_id]
         node_type = node.type
         if node_type is NodeType.KB_RETRIEVE:
-            # Thread the SESSION's tenant identity (Day 8, INV-1) down into
-            # the `kb-retrieve` executor (same inject-into-params pattern used
-            # for `retrieved_chunks` below) — never the recipe's own tenant
-            # field, which is client-declared and exactly the value INV-1
-            # must not trust.
-            # `session_context.tenant_id` is set AFTER the `**node.params`
-            # spread on purpose: whatever tenant identity a client-authored
-            # node already carries in its own params (the workbench recipe
-            # only ever puts a tenant SLUG there, never a UUID, but nothing
-            # stops a hand-crafted recipe from putting a UUID) is always
-            # overwritten by the session's, never merely supplemented — a
-            # missing/malformed value post-override still fails closed at
-            # `KbRetrieveExecutor` (`isinstance(..., UUID)`-check, raises
+            # Thread the SESSION's tenant identity AND scope (Day 8 INV-1 /
+            # Day 17 T6 label-spoof) down into the `kb-retrieve` executor
+            # (same inject-into-params pattern used for `retrieved_chunks`
+            # below) — never the recipe's own tenant/section_roles fields,
+            # which are client-declared (`section_roles` in particular comes
+            # from `_parse_kb_scope` parsing the workbench recipe's
+            # `kb_binding.scope` string, `builder.py:32-80` ->
+            # `:207-216`/`:278-287`) and exactly the values these fences must
+            # not trust.
+            # Both overrides are set AFTER the `**node.params` spread on
+            # purpose: whatever a client-authored node already carries in its
+            # own params (the workbench recipe only ever puts a tenant SLUG
+            # there, never a UUID, but nothing stops a hand-crafted recipe
+            # from putting a UUID; same for a `section_roles` list) is always
+            # OVERWRITTEN by the session's, never merely supplemented — a
+            # missing/malformed `tenant_id` post-override still fails closed
+            # at `KbRetrieveExecutor` (`isinstance(..., UUID)`-check, raises
             # `PermissionError`, see `executors.py`), it does not fall back
             # to a sentinel (that fallback was removed, Day 8 phase 2).
-            node = node.model_copy(update={"params": {**node.params, "tenant_id": session_context.tenant_id}})
+            #
+            # `section_roles` (Day 17, plan 260811-1121-d17, QĐ-7): `[]` is
+            # already deny-all at retrieval (`static_search.py`: `allowed =
+            # set(section_roles)`, no match -> 0 chunks) so there is no
+            # `PermissionError` branch here the way there is for `tenant_id`
+            # — but the raw value still needs EXPLICIT normalization, not a
+            # bare `list(raw_roles)`. Probed for real (not assumed):
+            # `list("public")` -> `['p','u','b','l','i','c']` (6 garbage
+            # roles — a WIDENING of scope, not deny-all), and `list(None)`
+            # raises `TypeError` mid-walk with nothing to catch it. Both are
+            # worse than a clean fail-closed `[]`. The real `resolve_session`
+            # (SWE, `tenant_wall.py:184-195`) already normalizes, so
+            # production never hits this; a test double that mis-declares
+            # `.roles` can. QĐ-5: values are passed through UNCHANGED after
+            # type coercion — no sort, no dedupe, no `"public"` injection, no
+            # `SECTION_VOCAB` validation (that vocabulary belongs to DE,
+            # `.importlinter` forbids `studio_engine` importing `studio_kb`
+            # anyway).
+            raw_roles = session_context.roles
+            session_roles = [str(r) for r in raw_roles] if isinstance(raw_roles, list) else []
+            node = node.model_copy(
+                update={
+                    "params": {
+                        **node.params,
+                        "tenant_id": session_context.tenant_id,
+                        "section_roles": session_roles,
+                    }
+                }
+            )
         if node_type is NodeType.LLM_STEP:
             node = node.model_copy(
                 update={

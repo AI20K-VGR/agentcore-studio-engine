@@ -208,7 +208,15 @@ async def _run_case(case: GoldenCase) -> CaseOutcome:
     tenant_id = TENANT_IDS[case.tenant]
     result = await interpreter.run(
         _build_recipe(case),
-        session_context=_GoldenBatchSessionContext(tenant_id=tenant_id, user=f"d16-golden-{case.case_id}", roles=[]),
+        # Day 17 (plan 260811-1121-d17): `interpreter.run()` now server-resolves
+        # `section_roles` from `session_context.roles`, overwriting whatever the
+        # node/recipe declared — the session must mirror the case's OWN label
+        # (`roles=list(case.section_roles)`, NOT `{"public", *case.section_roles}`;
+        # the golden set declares single-role cases and adding `"public"` would
+        # widen 20+ cases' scope and desync `expected_citation`, plan Risk R2).
+        session_context=_GoldenBatchSessionContext(
+            tenant_id=tenant_id, user=f"d16-golden-{case.case_id}", roles=list(case.section_roles)
+        ),
         kb_search=StaticKbSearch(),
         llm=_GoldenAwareLLM(case.expected_citation),
         embedding=EmptyEmbedding(),
