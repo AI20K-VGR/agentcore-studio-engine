@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml  # type: ignore[import-untyped, unused-ignore]
 
 _ROOT = Path(__file__).resolve().parents[3]
 _KB_SRC = _ROOT / "packages" / "kb" / "src"

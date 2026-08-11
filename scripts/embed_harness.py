@@ -63,7 +63,7 @@ def load_cases(golden: str | Path) -> list[dict[str, Any]]:
     `import yaml` đặt TRONG hàm (lazy) — chủ ý — để module này import được ở môi trường
     không cài PyYAML; chỉ lúc thật sự gọi `load_cases` mới cần dep đó.
     """
-    import yaml  # type: ignore[import-untyped]  # noqa: PLC0415 — lazy nhìn thấy ở docstring trên
+    import yaml  # type: ignore[import-untyped, unused-ignore]  # noqa: PLC0415 — lazy, xem docstring trên
 
     path = Path(golden)
     if not path.is_file():
