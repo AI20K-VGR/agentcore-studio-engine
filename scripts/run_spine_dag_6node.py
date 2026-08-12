@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from studio_contracts import (
@@ -71,10 +70,14 @@ _FIXTURE_CASE_ID = "smoke-01"
 class _SpineSessionContext:
     """Session-context double satisfying `studio_engine.session.SessionContext`
     structurally (Day 8 INV-1 Tenant-Wall) — same shape as
-    `run_golden_batch.py::_GoldenBatchSessionContext`; this script has no real
-    login session to read, tenant identity is the fixed `_TENANT_ID` above."""
+    `run_real_batch.py::_RealBatchSessionContext` (`tenant_id: UUID`, not
+    `Any` — code-review M-2: keeps mypy-strict checking the value that
+    actually crosses INV-1's tenant fence, instead of only catching a
+    mismatch at runtime via `KbRetrieveExecutor`'s `isinstance` guard).
+    This script has no real login session to read, tenant identity is the
+    fixed `_TENANT_ID` above."""
 
-    tenant_id: Any
+    tenant_id: UUID
     user: str
     roles: list[str]
 
@@ -154,11 +157,14 @@ async def run_spine() -> interpreter.RunResult:
 def main() -> None:
     result = asyncio.run(run_spine())
     node_types = [event.node_type for event in result.events]
-    expected = list(NodeType)
     print(f"run_id={result.run_id}")
     for event in result.events:
         print(f"  {event.node_id:8s} {event.node_type.value:12s} outputs={event.outputs!r}")
-    ok = len(result.events) == 6 and node_types == expected == [
+    # Compared against the literal walk order, NOT `list(NodeType)` — the
+    # enum's declaration order in `packages/contracts` is not a behavior of
+    # this walk, and pinning to it would make a harmless enum-member reorder
+    # (no new type, no behavior change) exit non-zero here (code-review M-1).
+    ok = node_types == [
         NodeType.KB_RETRIEVE,
         NodeType.LLM_STEP,
         NodeType.CONDITION,
