@@ -182,6 +182,18 @@ class KbRetrieveExecutor:
         return await self._kb_search.search(query, raw_tenant_id, section_roles, top_k)
 
 
+# D18 (kit#116) gateway-flag — the set of `LLM` impl CLASS NAMES this module
+# recognizes as a known test/demo double (`demo_stubs.py`), checked by name
+# rather than `isinstance` (a name check needs no import of `demo_stubs`
+# back into this core module, keeping the dependency direction one-way:
+# `demo_stubs` depends on `studio_contracts`, never the other way).
+# Deliberately NOT trying to positively recognize a real gateway impl (none
+# has shipped yet) — the safe direction is to default UNKNOWN impls to
+# `"gateway"`, never to under-claim `"stub"` for an impl this set doesn't
+# name. Add a name here only when a new known double lands in `demo_stubs.py`.
+_KNOWN_STUB_LLM_CLASS_NAMES = frozenset({"FixtureLLM"})
+
+
 class LlmStepExecutor:
     """`llm-step` node — calls `LLM.complete` (gateway-stub client, per-agent
     x env) over the prompt/context (including any cited chunk carried from an
@@ -195,12 +207,25 @@ class LlmStepExecutor:
 
     async def execute(self, node: Node) -> object:
         """Output shape (v0 stub): `{"answer": <LLM.complete str>, "tokens":
-        Tokens(0, 0), "citations": [...], "refused": <bool>}`. `tokens` is
-        hardcoded to `Tokens(0, 0)`: Day 3's `LLM` collaborator is a fixture
-        replay with no real token accounting; real usage lands with the
-        gateway-stub client. `embedding` is wired via constructor-DI but
-        unused here — Day 3's recipe never calls for an embed step (Day 7 is
-        the real usage).
+        Tokens(0, 0), "citations": [...], "refused": <bool>, "llm_source":
+        <"stub"|"gateway">}`. `tokens` is hardcoded to `Tokens(0, 0)`: Day 3's
+        `LLM` collaborator is a fixture replay with no real token accounting;
+        real usage lands with the gateway-stub client. `embedding` is wired
+        via constructor-DI but unused here — Day 3's recipe never calls for
+        an embed step (Day 7 is the real usage).
+
+        `llm_source` (D18, kit#116, judge-consumption stability): a
+        classification flag, NOT a live gateway integration — `"stub"` when
+        `type(self._llm).__name__` is a known test/demo double
+        (`_KNOWN_STUB_LLM_CLASS_NAMES`, currently just `FixtureLLM`), else
+        `"gateway"`. The classification is by CLASS NAME, not `isinstance`
+        against `LLM` (every impl, stub or real, satisfies that Protocol
+        structurally) — name is the only signal this module has for "which
+        concrete collaborator was injected". Default is deliberately
+        `"gateway"`: an impl this set doesn't recognize is reported as the
+        more consequential value (a judge/consumer reading `"stub"` would
+        assume fixture-replay determinism a real gateway call does not
+        have), never silently mislabeled `"stub"`.
 
         Citations (Day 4 threading, spec AIE-1, grounded): `node.params["retrieved_chunks"]`
         carries the `KbSearchResultItem` list `interpreter.run()` threaded in
@@ -285,11 +310,13 @@ class LlmStepExecutor:
         # a "real" citation and score a false-positive citation-accuracy.
         retrieved_ids = {chunk.chunk_id for chunk in retrieved_chunks}
         citations = [cid for cid in _CITATION_RE.findall(answer) if cid in retrieved_ids]
+        llm_source = "stub" if type(self._llm).__name__ in _KNOWN_STUB_LLM_CLASS_NAMES else "gateway"
         return {
             "answer": answer,
             "tokens": Tokens(prompt=0, completion=0),
             "citations": citations,
             "refused": not citations,
+            "llm_source": llm_source,
         }
 
 
