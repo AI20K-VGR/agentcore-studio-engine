@@ -112,13 +112,14 @@ class KbRetrieveExecutor:
       by widening or re-deriving `section_roles` on the client/executor side.
     - The result's cited `chunk_id`s flow into the emitted `TraceEvent.citations`.
 
-    Trạng thái 2026-07-23 (DE-blocked): `KbSearch.search(...)` ở trên vẫn được
-    gọi qua interface — nhưng impl thật (`packages/kb/src/studio_kb/search.py
-    ::KbSearchService.search`) vẫn `raise NotImplementedError` (DE chưa xong,
-    pin bằng `packages/kb/tests/test_search_contract.py`). `.importlinter`
-    cấm `studio_engine` import `studio_kb` trực tiếp, nên điểm nối `KbSearch`
-    thật chỉ có thể xảy ra ở `apps/studio` (composition root, Day 6) — KHÔNG
-    ở đây. Điểm flip khi DE xong:
+    Trạng thái 2026-08-12 (D17 flip, `kb#19`): seam chính thức
+    `KbSearchService.search()` (`packages/kb/src/studio_kb/search.py`) đã
+    un-ratchet — không còn raise `NotImplementedError`, nay uỷ quyền một dòng
+    sang `PgKbSearch.search` (`postgres.py`), impl fenced retrieval thật đã
+    nằm trên spine từ D13. `.importlinter` vẫn cấm `studio_engine` import
+    `studio_kb` trực tiếp, nên điểm nối `KbSearch` thật vẫn chỉ xảy ra ở
+    `apps/studio` (composition root, Day 6) — KHÔNG ở đây. Điểm flip e2e khi
+    owner điền assertion thật (hôm nay cả hai còn `pytest.skip`, chưa khoá gì):
     `tests/e2e/test_lifecycle.py::test_step_2_attach_tools_and_kb_scope` và
     `tests/e2e/test_lifecycle.py::test_step_5_fence_proof_zero_leak_money_shot`.
     """
@@ -231,12 +232,31 @@ class LlmStepExecutor:
 
     async def execute(self, node: Node) -> object:
         """Output shape (v0 stub): `{"answer": <LLM.complete str>, "tokens":
-        Tokens(0, 0), "citations": [...], "refused": <bool>, "llm_source":
-        <"stub"|"gateway">}`. `tokens` is hardcoded to `Tokens(0, 0)`: Day 3's
-        `LLM` collaborator is a fixture replay with no real token accounting;
-        real usage lands with the gateway-stub client. `embedding` is wired
-        via constructor-DI but unused here — Day 3's recipe never calls for
-        an embed step (Day 7 is the real usage).
+        Tokens(prompt=N, completion=M), "citations": [...], "refused": <bool>,
+        "llm_source": <"stub"|"gateway">}`. `embedding` is wired via
+        constructor-DI but unused here — Day 3's recipe never calls for an
+        embed step (Day 7 is the real usage).
+
+        `tokens` (D19, kit#121): counted by whitespace-split
+        (`len(text.split())`) on `prompt` for `.prompt` and on `answer` for
+        `.completion` — NOT a real BPE/model tokenizer, since no gateway
+        impl ships in this kit (R-6). Deterministic and good enough for
+        internal cost-lineage; DE (who computes `cost` from this `tokens`
+        output, design locked at `DL-11.A1-5` — executor only emits
+        `tokens`, sink computes `cost`) needs to price against this exact
+        unit, not a real model's token count. Here `prompt` is the local
+        variable below (`declared_prompt or build_prompt(...)`) — the FULL
+        rendered string actually sent to `LLM.complete()`, including the
+        `_PROMPT_HEADER` scaffold and every retrieved chunk's full text, NOT
+        `node.params["prompt"]` directly (a recipe author typically never
+        declares it — see the module-level comment above `_PROMPT_HEADER`);
+        the two can differ by an order of magnitude once chunks are
+        retrieved, and DE prices cost off this count. Whitespace-split also
+        under-counts Vietnamese text relative to a real BPE tokenizer — the
+        exact ratio is `[ASSUMED]`, not measured (no tokenizer ships in this
+        kit, R-6) — and would read a space-less script's entire answer as a
+        single token. A known unit mismatch, not a bug, but DE should not
+        treat this count as tokenizer-equivalent when pricing.
 
         `llm_source` (D18, kit#116, judge-consumption stability): a
         classification flag, NOT a live gateway integration — `"stub"` when
@@ -339,7 +359,7 @@ class LlmStepExecutor:
         llm_source = "stub" if type(self._llm).__name__ in _KNOWN_STUB_LLM_CLASS_NAMES else "gateway"
         return {
             "answer": answer,
-            "tokens": Tokens(prompt=0, completion=0),
+            "tokens": Tokens(prompt=len(prompt.split()), completion=len(answer.split())),
             "citations": citations,
             "refused": not citations,
             "llm_source": llm_source,

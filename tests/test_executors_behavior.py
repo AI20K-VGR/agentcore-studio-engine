@@ -111,7 +111,14 @@ async def test_llm_step_replays_fixture_answer() -> None:
     result = await LlmStepExecutor(FixtureLLM("smoke-01"), EmptyEmbedding()).execute(node)
     assert isinstance(result, dict)
     assert result["answer"] == fixture["response"]
-    assert result["tokens"] == Tokens(prompt=0, completion=0)
+    # D19 (kit#121): tokens is a real whitespace-split count of the built
+    # prompt (= fixture["request"]["prompt"], declared) and the LLM's answer
+    # (= fixture["response"]) — no longer the hardcoded Tokens(0, 0). Counts
+    # derived directly from the fixture text via `len(text.split())`, same
+    # rule `LlmStepExecutor.execute` uses.
+    assert result["tokens"] == Tokens(
+        prompt=len(fixture["request"]["prompt"].split()), completion=len(fixture["response"].split())
+    )
     assert result["citations"] == ["chunk-001"]
     # A real fixture answer (not the sentinel) is content, not a refusal → False.
     assert result["refused"] is False
