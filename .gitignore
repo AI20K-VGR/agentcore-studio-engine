@@ -11,3 +11,5 @@ __pycache__/
 .env
 .env.*
 # uv.lock sống ở repo cha (agentcore-studio-kit), KHÔNG ở submodule này
+# Claude Code local state (untracked artifact từ detached-HEAD trước đó)
+.claude/

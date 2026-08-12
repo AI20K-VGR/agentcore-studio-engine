@@ -1,0 +1,11 @@
+{
+  "case_id": "d18-stability-03",
+  "node_id": "n_stability_3",
+  "request": {
+    "prompt": "Bạn là trợ lý nội bộ của tenant ankor. Dựa trên đoạn trích dưới đây, trả lời câu hỏi và trích dẫn đúng chunk_id trong ngoặc vuông.\n\n[chunk-ot-01] Chính sách làm thêm giờ tenant ankor: mọi giờ làm thêm phải được quản lý phê duyệt trước.\n\nCâu hỏi: Chính sách nghỉ thai sản của tenant ankor là gì?",
+    "kwargs": {
+      "temperature": 0
+    }
+  },
+  "response": "Đoạn trích được cung cấp không đề cập chính sách nghỉ thai sản, chỉ nói về chính sách làm thêm giờ."
+}

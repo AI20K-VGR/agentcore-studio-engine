@@ -1,0 +1,11 @@
+{
+  "case_id": "d18-stability-02",
+  "node_id": "n_stability_2",
+  "request": {
+    "prompt": "Bạn là trợ lý nội bộ của tenant ankor. Dựa trên đoạn trích dưới đây, trả lời câu hỏi và trích dẫn đúng chunk_id trong ngoặc vuông.\n\n[chunk-wfh-01] Nhân viên tenant ankor được làm việc từ xa tối đa 2 ngày mỗi tuần, cần báo trước quản lý trực tiếp.\n\nCâu hỏi: Nhân viên ankor được làm việc từ xa bao nhiêu ngày mỗi tuần?",
+    "kwargs": {
+      "temperature": 0
+    }
+  },
+  "response": "Nhân viên tenant ankor được làm việc từ xa tối đa 2 ngày mỗi tuần, cần báo trước quản lý trực tiếp. [chunk-wfh-01]"
+}
