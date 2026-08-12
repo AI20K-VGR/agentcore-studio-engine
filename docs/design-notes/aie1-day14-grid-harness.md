@@ -113,3 +113,27 @@ module bằng `importlib.util.spec_from_file_location`"): xoá `conftest.py`,
 `@dataclass`/`from __future__ import annotations` cần `sys.modules[cls.__module__]` có
 thật để suy giải kiểu). Kết quả: `uv run mypy packages apps` → `Success: no issues found`,
 `uv run pytest packages/engine/tests -q` → 130 passed, không cần `conftest.py`.
+
+## Addendum 2026-08-12 (D20, kit#126) — kiểm tái lập, KHÔNG phải phép đo mới
+
+Chạy lại `uv run python packages/engine/scripts/measure_chunk_embed.py --grid` hôm nay
+(phase D20, `plans/260812-1133-d18-d20-aie1-engine-daily-prs/phases/phase-3-d20-dag-real-spine-trade-off.md`)
+để xác nhận bảng D14 ở trên vẫn còn hợp lệ trước khi trích dẫn nó trong PR spine 6-node.
+
+**Probe trước khi chạy lại** (bắt buộc theo phase D20): `git -C packages/kb log --oneline
+51df3a4..HEAD -- docs/callisto src/studio_kb/doc_factory.py src/studio_kb/embeddings.py
+golden/smoke-10.yaml` → **rỗng** — corpus/chunker/embedder chưa đổi 1 dòng nào kể từ SHA
+đo D14 (`51df3a4`, 2026-08-06). Nói cách khác, input của phép đo hôm nay và D14 là **cùng
+một trạng thái**, nên đây là kiểm tái lập (cùng corpus + cùng code ⇒ cùng số), không phải
+một phép đo mới.
+
+**Kết quả**: cả 12 hàng của bảng `--grid` (4 cắt × 2 impl thật + 1 control) ở trên khớp
+**từng số một** với bảng D14 đã ghi — không lệch một ô nào (recall@1, tranh, mất, margin
+tb đều giống hệt). Xác nhận tái lập thành công trên trạng thái corpus/code hôm nay.
+
+**Ràng buộc, ghi rõ để không đọc nhầm**: đây là kiểm tái lập trên harness **không-Postgres**
+(`measure_chunk_embed.py` tự ghi rõ ở đầu file: "Không mạng, không model, không Postgres" —
+import duy nhất từ `studio_kb` là `doc_factory.chunk_document`/`embeddings.derive_vector`,
+không phải `static_search`/DSN nào), **KHÔNG phải một phép đo qua `PgKbSearch`** (impl fenced
+retrieval thật trên Postgres, đã flip D17, `kb#19`). Bảng số trên nói về chunking×embedding
+CÔ LẬP khỏi tầng lưu trữ/truy vấn thật — không tự nhận đã đo qua KB thật.
