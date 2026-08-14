@@ -6,13 +6,20 @@
 > điều tra thật cho finding (e)① mà `dholmes0207` nêu ở `kit#126` (13/08) — đo bằng thực nghiệm, không
 > phải suy luận.
 >
-> **Sửa sau review `engine#26` (dholmes0207, `CHANGES_REQUESTED`, 4 finding — cả 4 đã kiểm tra lại
-> độc lập bằng lệnh thật, cả 4 đều đúng):** F-1 sửa câu sai số lượng script chạm `studio_kb` (§3, §5).
-> F-2 thêm §6 (gitlink) — bump con trỏ kit ngay sau merge để evidence-pack không "tàng hình" trong
-> fresh-clone. F-3 đổi §4.1 từ "thực nghiệm là bằng chứng chính" sang "diff là bằng chứng chính,
-> thực nghiệm là đối chứng có negative control". F-4 chạy thêm 1 thí nghiệm tách biến thật, đổi kết
-> luận §4.2 từ "1 biến (runner/LLM)" sang "2 biến, retrieval backend là biến chính" — đổi cả owner
-> tiếp theo (thêm DE). Không finding nào bị bác — cả 4 xác nhận đúng trước khi sửa.
+> **Sửa sau review `engine#26` round 1 (dholmes0207, `CHANGES_REQUESTED`, 4 finding — cả 4 đã kiểm
+> tra lại độc lập bằng lệnh thật, cả 4 đều đúng):** F-1 sửa câu sai số lượng script chạm `studio_kb`
+> (§3, §5). F-2 thêm §6 (gitlink). F-3 đổi §4.1 sang "diff là bằng chứng chính, thực nghiệm là đối
+> chứng có negative control". F-4 chạy thí nghiệm tách biến, đổi kết luận §4.2 sang "2 biến,
+> retrieval backend là biến chính" — đổi owner tiếp theo (thêm DE).
+>
+> **Sửa sau round 2 (dholmes0207, 3 điểm — cả 3 đã kiểm tra lại độc lập, cả 3 đều đúng):** R-1 —
+> §6 bịa quy ước "commit thẳng không qua PR" không có thật; sửa về đúng đường 5 lần bump trước đã
+> dùng (qua PR). R-2 — §4.1 neo sai dòng (`126,132-133` là số dòng của output diff, không phải file
+> thật; số đúng là `358,364`). R-3 — số quan trọng nhất của §4.2 (thí nghiệm tách biến) từng là
+> placeholder không dán-chạy được; đã commit thành script thật
+> (`apps/studio/scripts/probe_isolate_retrieval_d20.py`), và ghi thêm 1 hiện tượng chưa giải thích
+> được (đảo dấu giữa 2 chỉ số khi đổi biến runner/LLM) mà round-2 review phát hiện. Không finding
+> nào ở cả 2 round bị bác.
 
 ---
 
@@ -104,9 +111,12 @@ $ git -C packages/engine diff 62773ba bfa19cc -- src/studio_engine/executors.py 
 ```
 
 Hai dòng đổi thật duy nhất nhắc `citations`/`refused` nằm **trong docstring ví dụ**, không phải code.
-Dòng tính `citations`/`refused` thật (`executors.py:126,132-133`,
-`citations = [cid for cid in _CITATION_RE.findall(answer) if cid in retrieved_ids]` /
-`"refused": not citations`) là **context không đổi** ở cả hai commit. Delta ngữ nghĩa thật giữa hai
+Dòng tính `citations`/`refused` thật (`executors.py:358,364` tại `bfa19cc` — **sửa sau round-2 review
+`engine#26` (R-2, dholmes0207)**: bản trước ghi nhầm `126,132-133`, đó là số dòng của *output diff*
+đếm bằng `grep -n`, không phải số dòng thật trong file; `git show bfa19cc:src/studio_engine/
+executors.py | sed -n '358p;364p'` xác nhận đúng `citations = [cid for cid in _CITATION_RE.findall
+(answer) if cid in retrieved_ids]` / `"refused": not citations,`) là **context không đổi** ở cả hai
+commit. Delta ngữ nghĩa thật giữa hai
 bản chỉ có `llm_source` flag (D18) + `Tokens(prompt, completion)` thật (D19) — không chạm logic
 citation/refusal. ⇒ **"sai số 0" giữa hai bản engine là kết quả bị đảm bảo trước khi chạy bởi chính
 diff này, không phải một phát hiện thực nghiệm.**
@@ -141,11 +151,15 @@ Hai đường lệch **cả hai** trục cùng lúc: **(a)** runner/LLM double (
 `EngineAgentRunner`+`ExtractiveFakeLLM` sống) **và (b)** retrieval backend (`StaticKbSearch` vs
 `PgKbSearch`). Bản gốc của mục này chỉ quy cho (a) — thiếu thí nghiệm tách biến. Đã bổ sung:
 
-**Thí nghiệm tách biến — đổi đúng 1 biến so với đường D20, giữ nguyên runner/LLM sống:**
+**Thí nghiệm tách biến — đổi đúng 1 biến so với đường D20, giữ nguyên runner/LLM sống. Sửa sau
+round-2 review (R-3, dholmes0207):** bản trước dán placeholder không chạy được
+(`<probe: EngineAgentRunner(...)>`), vi phạm chính chuẩn "dán-là-chạy" pack tự đặt ra ở đầu file.
+Đã commit thành script thật, permanent, trong repo:
 
 ```bash
-$ uv run pytest <probe: EngineAgentRunner(kb_search=StaticKbSearch(), llm=ExtractiveFakeLLM(), ...)> -s
-PROBE-ISOLATE kb_search=StaticKbSearch success_rate=0.66667 citation_accuracy=0.90909 n_scored=22 verdict=FAIL len=30
+$ uv run python apps/studio/scripts/probe_isolate_retrieval_d20.py
+kb_search=StaticKbSearch (giữ nguyên runner/LLM sống — chỉ đổi retrieval backend)
+success_rate=0.6667  citation_accuracy=0.9091  n_scored_citation=22  verdict=FAIL  len=30
 ```
 
 | Cấu hình | `kb_search` | runner/LLM | `success_rate` | `citation_accuracy` |
@@ -156,11 +170,19 @@ PROBE-ISOLATE kb_search=StaticKbSearch success_rate=0.66667 citation_accuracy=0.
 
 **Đổi đúng 1 biến (retrieval backend) đã kéo `citation_accuracy` từ `0.2273` lên `0.9091`** — gần sát
 `1.0000` của `DEC-D17-04` mà không đụng runner/LLM. Retrieval backend là biến **chính**, không phải
-runner/LLM như bản gốc quy kết một mình. Phần chênh còn lại (`0.9091` vs `1.0000`, `0.6667` vs
-`0.2667`) đến từ biến (a) — cả hai biến cùng góp phần, không phải 1 biến giải thích hết.
+runner/LLM như bản gốc quy kết một mình.
+
+**Một điểm CHƯA giải thích được — ghi lại, không giấu (R-3, dholmes0207):** đi từ hàng "Tách biến"
+sang hàng `DEC-D17-04` chỉ đổi biến (a) (runner/LLM: sống → ghi lại). `citation_accuracy` **tăng**
+(`0.9091 → 1.0000`) nhưng `success_rate` **giảm** (`0.6667 → 0.2667`) — **hai chỉ số đảo dấu khi đổi
+cùng một biến.** "Cả hai biến cùng góp phần tuyến tính" không mô tả được hiện tượng này. Không điều
+tra tiếp trong D20 (ngoài đường găng Gate-2) — có thể là biến thứ ba, hoặc đặc tính của cách
+`success_rate` được tính (không chỉ trên citation). Chi tiết + giả thuyết ở docstring của
+`probe_isolate_retrieval_d20.py`.
 
 **Không sửa số, không sửa harness của AIE-2/DE** (ngoài lane cả hai). Kết luận "không phải do bản
-`engine` D20" **đứng vững hơn trước** (giờ có diff + 2 thực nghiệm, không phải suy luận một chiều).
+`engine` D20" **đứng vững hơn trước** (giờ có diff + 2 thực nghiệm tái lập được, không phải suy luận
+một chiều) — nhưng cơ chế đầy đủ của cả 2 biến thì **chưa** đóng, ghi rõ ở trên.
 
 **Chủ tiếp theo:** **AIE-2** (chủ `EvalHarness`/`StubAgentRunner`, quyết có hội tụ 2 đường đo hay
 không) **+ DE** (chủ `PgKbSearch`/retrieval — biến chính lộ ra ở đây). **Không còn việc nào chờ
@@ -203,10 +225,16 @@ engine, chủ yếu là retrieval backend".
 `docs/evidence-d20.md`, và `fresh-clone gate` sẽ cap `O3.1` xuống B cho cả nhóm dù file này đã tồn
 tại trên `main` của engine.
 
+**Sửa sau round-2 review (R-1, dholmes0207) — đường vá trước đây SAI, đã kiểm lại bằng lệnh thật:**
+không có quy ước "commit thẳng, không qua PR" nào tồn tại trong kit (`grep -r
+"gitlink-bookkeeping"` chỉ khớp chính câu tự trích dẫn cũ của mục này). 5 lần bump gitlink gần nhất
+trên `main` (`#155`, `#154`, `#151`, `#150`, `#148`) **đều qua PR**, không có lần nào commit thẳng.
+
 **Việc cần làm ngay sau merge PR này (không phải phase riêng, xem thêm plan
 `260812-1133-d18-d20-aie1-engine-daily-prs` §Note cuối):** bump gitlink `packages/engine` trong kit
-lên đúng SHA merge-commit mới, commit `chore(gitlink): bump packages/engine ...` trực tiếp vào
-`agentcore-studio-kit`, không qua PR (quy ước docs/gitlink-bookkeeping của kit).
+lên đúng SHA merge-commit mới, theo đúng đường 5 lần trước đã dùng — nhánh `chore/d20-bump-engine-
+evidence` (hoặc tương đương), commit `chore(gitlink): bump packages/engine ...`, mở PR vào
+`agentcore-studio-kit`, review + merge như các lần trước, **không** commit thẳng `main`.
 
 ---
 
