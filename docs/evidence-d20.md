@@ -5,6 +5,14 @@
 > lời khai. §3 là **plan-vs-actual** đối chiếu [design-note D11](design-notes/aie1-day11.md) §5. §4 là
 > điều tra thật cho finding (e)① mà `dholmes0207` nêu ở `kit#126` (13/08) — đo bằng thực nghiệm, không
 > phải suy luận.
+>
+> **Sửa sau review `engine#26` (dholmes0207, `CHANGES_REQUESTED`, 4 finding — cả 4 đã kiểm tra lại
+> độc lập bằng lệnh thật, cả 4 đều đúng):** F-1 sửa câu sai số lượng script chạm `studio_kb` (§3, §5).
+> F-2 thêm §6 (gitlink) — bump con trỏ kit ngay sau merge để evidence-pack không "tàng hình" trong
+> fresh-clone. F-3 đổi §4.1 từ "thực nghiệm là bằng chứng chính" sang "diff là bằng chứng chính,
+> thực nghiệm là đối chứng có negative control". F-4 chạy thêm 1 thí nghiệm tách biến thật, đổi kết
+> luận §4.2 từ "1 biến (runner/LLM)" sang "2 biến, retrieval backend là biến chính" — đổi cả owner
+> tiếp theo (thêm DE). Không finding nào bị bác — cả 4 xác nhận đúng trước khi sửa.
 
 ---
 
@@ -40,9 +48,11 @@ export STUDIO_DATABASE_URL=postgresql://studio_app:changeme@localhost:5433/studi
 | **6 node-type executor chạy DAG thật qua ES** | `test_condition_dag_e2e.py` + `test_executors_behavior.py`: 6/6 `NodeType` (`kb-retrieve`/`llm-step`/`condition`/`tool-call`/`hitl-pause`/`end`) chạy chung **một** DAG thật, khoá bởi `test_node_type_closed.py` (cấm loại thứ 7) | ✅ |
 | **Bảng chunking×embedding trade-off có số, ghép vào spine** | `measure_chunk_embed.py` tái lập khớp D14 từng số (`aie1-day14-grid-harness.md`) — verify độc lập trước merge PR#25 | ✅ |
 | **Đã ghép vào spine (golden-30 correctness)** | `run_golden_batch.py`: **30/30** case khớp nhãn (citations + refused), qua `StaticKbSearch` thật + `interpreter.run()` thật | ✅ |
-| **Regression xanh trước PR** | `168 passed` (pytest) · ruff/mypy/lint-imports sạch — 5 lệnh, khớp CI thật `reusable-domain-ci.yml` job `lint` | ✅ |
+| **Regression xanh trước PR** | `168 passed` (pytest) · ruff/mypy/lint-imports sạch — 5 lệnh nằm trong job `test-reconstructed` của `reusable-domain-ci.yml` (không phải job `lint` — job đó tên `lint-shallow`, chạy bộ yếu hơn `uvx ruff check src tests`, và **skip** trên PR docs-only này) | ✅ |
 
-**3 PR riêng biệt của lane này (D18→D20), mỗi PR 1 ngày, không gộp:**
+**3 PR riêng biệt của lane này, mỗi PR ứng với 1 issue day-N, không gộp** (cả 3 tạo **và** merge
+cùng ngày 12/08, 06:19→09:06 UTC — "1 PR/ngày" ở đây nghĩa là 1 PR cho 1 day-issue, không phải nhịp
+làm việc trải 3 ngày lịch):
 
 | Ngày | PR | Merge commit | Nội dung |
 |---|---|---|---|
@@ -57,7 +67,7 @@ export STUDIO_DATABASE_URL=postgresql://studio_app:changeme@localhost:5433/studi
 | # | Cam kết D11 (03/08, §5) | Actual D20 | Kết |
 |---|---|---|---|
 | Q-3 | *"cost một-nguồn: đồng ý, executor chỉ cấp `tokens`, sink tính `cost`. Code đã đúng sẵn: `cost=_NO_COST`."* | Giữ nguyên đúng như cam kết: D19 (`engine#24`) đã thêm **token accounting thật** (`Tokens(prompt, completion)` không còn hard-code `(0,0)`), nhưng `interpreter.py:73,438` **vẫn** `cost=_NO_COST` (0.0) — executor không tự tính `cost`, đúng như đã ký ở D11. Sink (`obs.trace_events`/cost-lineage, lane DE) đọc `tokens` và **tự tính** `cost` on-read (`kb#22`, D19, merge 13/08). | ✅ **đúng như đã ký — không phải một lỗ sót, là kiến trúc đã chốt từ D11** |
-| Q-D | *"stub `kb.search` sống trong engine, không nhận `StubKbSearch` từ `packages/kb` — `.importlinter` cấm `studio_engine` import `studio_kb`."* | Giữ nguyên; `run_golden_batch.py` (script, ngoài `src/studio_engine/`) là nơi duy nhất engine chạm `studio_kb`, và nó nằm ngoài vùng `.importlinter` quét — đúng lý do đã nêu ở D11. | ✅ **đúng như đã ký** |
+| Q-D | *"stub `kb.search` sống trong engine, không nhận `StubKbSearch` từ `packages/kb` — `.importlinter` cấm `studio_engine` import `studio_kb`."* | Giữ nguyên phần ranh giới layer: mọi chỗ engine chạm `studio_kb` nằm ở `scripts/` (ngoài `src/studio_engine/`), ngoài vùng `.importlinter` quét — đúng lý do đã nêu ở D11. **Sửa sau review `engine#26` (F-1, dholmes0207):** câu gốc ở đây từng viết "`run_golden_batch.py` là nơi duy nhất" — **sai**, đếm thật có **3 script, 5 dòng import** (`run_real_batch.py`×1, `run_golden_batch.py`×2, `measure_chunk_embed.py`×2). Chi tiết + honest-TODO ở §5. | ✅ ranh giới layer đúng như đã ký · ⚠️ câu mô tả cũ sai số lượng, đã sửa |
 | — | *(D11 không có mục dự đoán riêng cho D20 — file chỉ tới §5, không có §6 "điểm S2 đã biết" như bản DE)* | D20 làm đúng phạm vi đã khoá ở plan `260812-1133-d18-d20-aie1-engine-daily-prs`: 6/6 node-type trong 1 DAG thật, không build gateway LLM/embedding thật (ngoài scope R-6), không đụng `packages/contracts`. | ✅ **không có mục nào D11 hứa mà D20 làm thiếu** |
 
 ---
@@ -70,46 +80,92 @@ export STUDIO_DATABASE_URL=postgresql://studio_app:changeme@localhost:5433/studi
 ra nhưng chưa xác nhận: *"`engine` hôm nay (`bfa19cc`, D20 6-node) mới hơn bản D17 đã đo — có thể là
 nguyên nhân."* Điều kiện lật đã hẹn: chạy lại trên `engine@62773ba` (D17) và so.
 
-### 4.1 Thực nghiệm — checkout `engine@62773ba`, chạy lại đúng harness, so trực tiếp
+> **Sửa sau review `engine#26` (dholmes0207, F-3/F-4):** bản gốc §4 dưới đây chỉ đưa phép đo thực
+> nghiệm làm bằng chứng, không kèm bằng chứng rẻ hơn (diff) và quy 1 nguyên nhân cho 1 biến trong khi
+> có 2. Cả hai đã sửa — xem 4.1 (thêm diff + negative control) và 4.2 (thêm thí nghiệm tách biến thật,
+> đổi kết luận owner).
 
-```text
-engine@bfa19cc (D20, hiện tại)  → success_rate=0.16667  citation_accuracy=0.22727  n_scored=22  verdict=FAIL
-engine@62773ba (D17, trước D20) → success_rate=0.16667  citation_accuracy=0.22727  n_scored=22  verdict=FAIL
+### 4.1 Giả thuyết "do `engine` D20" — bằng chứng rẻ (diff) trước, thực nghiệm sau (đối chứng)
+
+**Bằng chứng rẻ nhất, đủ để đóng câu hỏi:** diff thật giữa 2 bản engine mà finding so sánh —
+
+```bash
+$ git -C packages/engine diff --stat 62773ba bfa19cc -- src/
+ src/studio_engine/executors.py | 101 +++++++++++++++++++++++++++++++++++------
+ 1 file changed, 87 insertions(+), 14 deletions(-)
 ```
 
-Đo bằng cách checkout `packages/engine` sang `62773ba` (dọn `__pycache__` trước — bẫy bytecode đã biết
-từ D19/D20), chạy lại chính đường `EngineAgentRunner(kb_search=PgKbSearch, llm=ExtractiveFakeLLM,
-trace_writer=PgTraceWriter) → EvalHarness().run(...)` mà `apps/studio/tests/
-test_gate2_verdict_from_live_spine.py::test_verdict_fail_tu_run_that` dùng, sau đó checkout lại
-`bfa19cc` (trạng thái gốc khôi phục nguyên vẹn, không để lại thay đổi).
+Một file. Xem đúng dòng đổi (không phải context):
 
-**Kết luận: giả thuyết "do `engine` D20" BỊ BÁC BỎ bằng phép đo thật** — hai bản engine cách nhau 2
-PR (D18+D19+D20) cho **cùng một số**, sai số 0.
+```bash
+$ git -C packages/engine diff 62773ba bfa19cc -- src/studio_engine/executors.py | grep -n "^[+-].*\(citations\|refused\)"
+74:-        Tokens(0, 0), "citations": [...], "refused": <bool>}`. `tokens` is
+80:+        Tokens(prompt=N, completion=M), "citations": [...], "refused": <bool>,
+```
 
-### 4.2 Nguyên nhân thật — hai đường đo khác nhau, không phải hai bản engine khác nhau
+Hai dòng đổi thật duy nhất nhắc `citations`/`refused` nằm **trong docstring ví dụ**, không phải code.
+Dòng tính `citations`/`refused` thật (`executors.py:126,132-133`,
+`citations = [cid for cid in _CITATION_RE.findall(answer) if cid in retrieved_ids]` /
+`"refused": not citations`) là **context không đổi** ở cả hai commit. Delta ngữ nghĩa thật giữa hai
+bản chỉ có `llm_source` flag (D18) + `Tokens(prompt, completion)` thật (D19) — không chạm logic
+citation/refusal. ⇒ **"sai số 0" giữa hai bản engine là kết quả bị đảm bảo trước khi chạy bởi chính
+diff này, không phải một phát hiện thực nghiệm.**
 
-Đọc lại chính `DEC-D17-04` (`evalhub/docs/decisions/scorecard.md:357-362`):
+**Thực nghiệm (đối chứng, không phải bằng chứng chính) — kèm negative control:**
 
-> *"`30/30` KHÔNG chuyển thành `success_rate` của scorecard. Đo thật qua `EvalHarness.run` trên chính
-> output đó (golden-30, **`StubAgentRunner` nạp từ interpreter thật**)"* → `success_rate=0.2667`,
-> **`citation_accuracy=1.0000`**.
+```text
+$ git -C packages/engine rev-parse --short HEAD && uv run pytest ... -s
+PROBE engine@bfa19cc success_rate=0.16667 citation_accuracy=0.22727 n_scored=22 verdict=FAIL len=30
 
-So với đường D20 (`test_gate2_verdict_from_live_spine.py`): `EngineAgentRunner` sống, dùng
-**`ExtractiveFakeLLM`** trực tiếp (không phải câu trả lời đã ghi lại từ một lần chạy interpreter khác)
-→ `citation_accuracy=0.2273`.
+$ git -C packages/engine checkout 62773ba && git -C packages/engine rev-parse --short HEAD && uv run pytest ... -s
+PROBE engine@62773ba success_rate=0.16667 citation_accuracy=0.22727 n_scored=22 verdict=FAIL len=30
+```
 
-**Chênh `citation_accuracy` (1.0000 vs 0.2273) là dấu vết rõ nhất: đây là hai đường đo khác nhau, không
-phải cùng một phép đo trên hai commit khác nhau của engine.** `DEC-D17-04` nạp câu trả lời **đã ghi
-lại** (recorded) từ một lần chạy trước vào `StubAgentRunner`; D20 chạy **sống** qua `ExtractiveFakeLLM`
-mỗi lần. Khác double, khác pha trích câu, khác citation — engine chỉ là seam bị nghi oan vì nó là thứ
-mới nhất vừa đổi ngày hôm đó.
+`git rev-parse --short HEAD` in ngay trước mỗi lần chạy — xác nhận checkout thật sự có hiệu lực
+(không phải nhãn gõ tay), dọn `__pycache__` trước mỗi lần (bẫy bytecode đã biết từ D19/D20). Kết quả
+**khớp diff dự đoán** — không có nondeterminism ẩn, và không mâu thuẫn kết luận ở trên. Sau khi đo,
+checkout lại `bfa19cc` (trạng thái gốc khôi phục nguyên vẹn).
 
-**Không sửa số, không sửa harness của AIE-2** (ngoài lane). Kết quả đã đóng câu hỏi ban đầu ("có phải
-do `engine` D20") bằng phép đo, và mở lại câu hỏi đúng: hai đường đo có nên hội tụ về một hay không —
-đó là quyết định của AIE-2 (chủ `EvalHarness`/`StubAgentRunner`), không phải của lane này.
+**Kết luận §4.1: giả thuyết "do `engine` D20" BỊ BÁC BỎ** — bằng diff (bằng chứng chính) và xác nhận
+bằng thực nghiệm (đối chứng, không mâu thuẫn).
 
-**Chủ tiếp theo:** AIE-2 (đối chiếu 2 đường đo). **Không còn việc nào chờ AIE-1** trên finding (e)① —
-điều kiện lật đã đo xong, kết luận là "không phải engine".
+### 4.2 Nguyên nhân thật — HAI biến khác nhau giữa `DEC-D17-04` và đường D20, không phải một
+
+`DEC-D17-04` (`evalhub/docs/decisions/scorecard.md:357-362`) đo qua `run_golden_batch.py` →
+`StubAgentRunner` **nạp từ interpreter thật chạy trên `StaticKbSearch`** (in-memory) →
+`success_rate=0.2667`, `citation_accuracy=1.0000`. Đường D20
+(`test_gate2_verdict_from_live_spine.py`) chạy `EngineAgentRunner` **sống** qua `ExtractiveFakeLLM`
+**trên `PgKbSearch`** (Postgres thật) → `citation_accuracy=0.2273`.
+
+Hai đường lệch **cả hai** trục cùng lúc: **(a)** runner/LLM double (`StubAgentRunner` ghi lại vs
+`EngineAgentRunner`+`ExtractiveFakeLLM` sống) **và (b)** retrieval backend (`StaticKbSearch` vs
+`PgKbSearch`). Bản gốc của mục này chỉ quy cho (a) — thiếu thí nghiệm tách biến. Đã bổ sung:
+
+**Thí nghiệm tách biến — đổi đúng 1 biến so với đường D20, giữ nguyên runner/LLM sống:**
+
+```bash
+$ uv run pytest <probe: EngineAgentRunner(kb_search=StaticKbSearch(), llm=ExtractiveFakeLLM(), ...)> -s
+PROBE-ISOLATE kb_search=StaticKbSearch success_rate=0.66667 citation_accuracy=0.90909 n_scored=22 verdict=FAIL len=30
+```
+
+| Cấu hình | `kb_search` | runner/LLM | `success_rate` | `citation_accuracy` |
+|---|---|---|---|---|
+| `DEC-D17-04` | `StaticKbSearch` | `StubAgentRunner` (ghi lại) | 0.2667 | **1.0000** |
+| Đường D20 | `PgKbSearch` | `EngineAgentRunner`+`ExtractiveFakeLLM` (sống) | 0.1667 | 0.2273 |
+| **Tách biến** (đường D20, chỉ đổi `kb_search`) | `StaticKbSearch` | `EngineAgentRunner`+`ExtractiveFakeLLM` (sống) | **0.6667** | **0.9091** |
+
+**Đổi đúng 1 biến (retrieval backend) đã kéo `citation_accuracy` từ `0.2273` lên `0.9091`** — gần sát
+`1.0000` của `DEC-D17-04` mà không đụng runner/LLM. Retrieval backend là biến **chính**, không phải
+runner/LLM như bản gốc quy kết một mình. Phần chênh còn lại (`0.9091` vs `1.0000`, `0.6667` vs
+`0.2667`) đến từ biến (a) — cả hai biến cùng góp phần, không phải 1 biến giải thích hết.
+
+**Không sửa số, không sửa harness của AIE-2/DE** (ngoài lane cả hai). Kết luận "không phải do bản
+`engine` D20" **đứng vững hơn trước** (giờ có diff + 2 thực nghiệm, không phải suy luận một chiều).
+
+**Chủ tiếp theo:** **AIE-2** (chủ `EvalHarness`/`StubAgentRunner`, quyết có hội tụ 2 đường đo hay
+không) **+ DE** (chủ `PgKbSearch`/retrieval — biến chính lộ ra ở đây). **Không còn việc nào chờ
+AIE-1** trên finding (e)① — điều kiện lật đã đo xong ở cả 2 lớp bằng chứng, kết luận là "không phải
+engine, chủ yếu là retrieval backend".
 
 ---
 
@@ -120,8 +176,40 @@ do `engine` D20") bằng phép đo, và mở lại câu hỏi đúng: hai đư�
   có việc nào của AIE-1 còn treo ở mục này.
 - **Gateway LLM/embedding thật** — chính thức ngoài scope kit (quyết định R-6,
   `docs/system-architecture.md §6`). Không build trong 3 PR D18-D20.
+- **R-2 (daily-note D15, 07/08): "walk_from_dag bị từ chối vì tốn thêm 1 dòng import `studio_kb`,
+  vi phạm R-2" — R-2 hiện ĐANG GÃY ở 2/3 script.** (`engine#26`, F-1, phát hiện bởi `dholmes0207`.)
+  Đếm thật tại `bfa19cc`:
+
+  | Script | Dòng import `studio_kb` | R-2 (≤1 dòng) |
+  |---|---|---|
+  | `scripts/run_real_batch.py` | 1 (có annotation `R-2: 1 dòng duy nhất`) | ✅ |
+  | `scripts/run_golden_batch.py` | 2 (annotation ghi "1 dòng duy nhất" nhưng đếm ra 2) | ❌ |
+  | `scripts/measure_chunk_embed.py` | 2 (không annotation) | ❌ |
+
+  `lint-imports` báo `0 broken` vì `.importlinter` `root_packages` không quét `scripts/` — CI xanh ở
+  đây là **guard mù đúng chỗ gãy**, không phải bằng chứng tuân thủ. Không tự sửa import trong PR
+  evidence-pack này (đổi `src`-adjacent script ngày gate là rủi ro không cần thiết, và không phải
+  scope PR docs-only) — ghi lại làm honest-TODO có chủ: **AIE-1**, hạn **sau Gate-2** (không chặn
+  DoD nào của `kit#126` — R-2 là kỷ luật nội bộ scripts, không phải AC).
 
 ---
 
-*Neo state: `packages/engine@bfa19cc` · `apps/studio@` (SHA lúc chạy §4, xem `git -C apps/studio
-rev-parse HEAD` tại thời điểm đọc) · Postgres qua `docker-compose.test.yml`.*
+## 6. Gitlink — vì sao evidence-pack này có thể "tàng hình" trong fresh clone
+
+**Việc đã biết, đúng lớp lỗi `kit#73` (`engine#26`, F-2, phát hiện bởi `dholmes0207`):** PR này thêm
+1 commit mới vào `main` của `agentcore-studio-engine`, đẩy tip qua khỏi `bfa19cc`. Con trỏ submodule
+`packages/engine` trong `agentcore-studio-kit` **vẫn ghim `bfa19cc`** cho tới khi có PR bump riêng —
+`git clone --recursive` kit ngay sau khi PR này merge sẽ ra cây engine **không có**
+`docs/evidence-d20.md`, và `fresh-clone gate` sẽ cap `O3.1` xuống B cho cả nhóm dù file này đã tồn
+tại trên `main` của engine.
+
+**Việc cần làm ngay sau merge PR này (không phải phase riêng, xem thêm plan
+`260812-1133-d18-d20-aie1-engine-daily-prs` §Note cuối):** bump gitlink `packages/engine` trong kit
+lên đúng SHA merge-commit mới, commit `chore(gitlink): bump packages/engine ...` trực tiếp vào
+`agentcore-studio-kit`, không qua PR (quy ước docs/gitlink-bookkeeping của kit).
+
+---
+
+*Neo state: `packages/engine@bfa19cc` · `apps/studio@79b8f0e` (SHA lúc chạy §4, xác nhận lại bằng
+`git -C apps/studio rev-parse HEAD` tại thời điểm đọc — SHA đổi nếu `apps/studio` có PR mới sau khi
+trang này viết) · Postgres qua `docker-compose.test.yml`.*
