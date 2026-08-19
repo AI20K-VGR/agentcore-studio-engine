@@ -1,4 +1,4 @@
-"""Chạy 30 case golden-set (`packages/kb/golden/callisto-golden-30-v1.yaml`) qua
+"""Chạy 30 case golden-set (`packages/kb/src/studio_kb/golden/callisto-golden-30-v1.yaml`) qua
 `interpreter.run()` THẬT bằng `StaticKbSearch` THẬT (không fixture) — D16 AIE-1 phase 1
 (plan `260810-1501-d16-aie1-golden-batch-determinism`). Đối chiếu `citations`/`refused`
 đọc từ `TraceEvent` thật (event `kb-retrieve`/`llm-step`, KHÔNG phải `AgentAnswer.citations`
@@ -34,7 +34,10 @@ import yaml  # type: ignore[import-untyped, unused-ignore]
 
 _ROOT = Path(__file__).resolve().parents[3]
 _KB_SRC = _ROOT / "packages" / "kb" / "src"
-_GOLDEN_SET_PATH = _ROOT / "packages" / "kb" / "golden" / "callisto-golden-30-v1.yaml"
+
+# `kb#37`/`kit#181`: `golden/` dời vào trong `src/studio_kb/` để đóng gói được vào wheel —
+# trước đó nằm cạnh `src/`, ngoài phạm vi wheel.
+_GOLDEN_SET_PATH = _ROOT / "packages" / "kb" / "src" / "studio_kb" / "golden" / "callisto-golden-30-v1.yaml"
 
 if not (_KB_SRC / "studio_kb" / "static_search.py").exists():
     print(
