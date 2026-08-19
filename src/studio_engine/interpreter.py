@@ -64,6 +64,7 @@ from studio_engine.executors import (
     LlmStepExecutor,
     NodeExecutor,
     ToolCallExecutor,
+    ToolDispatch,
 )
 from studio_engine.session import SessionContext
 
@@ -165,6 +166,7 @@ async def run(
     llm: LLM,
     embedding: EmbeddingService,
     trace_writer: TraceWriter,
+    tool_dispatch: ToolDispatch | None = None,
 ) -> RunResult:
     """Walk `recipe.dag` from its single start node, following `dag.edges`
     node-by-node, until an `end` node executes.
@@ -189,7 +191,9 @@ async def run(
 
     Constructs all 6 executors explicitly (constructor-DI, plan decision
     #2 — NOT a generic factory): `KbRetrieveExecutor(kb_search)`,
-    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with a
+    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with the
+    caller-supplied `tool_dispatch` when given (composition root injects a
+    real `ToolDispatch` here), else falling back to the demo-only
     `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)`,
     `ConditionExecutor()`, `HitlPauseExecutor()`, and `EndExecutor()`. Day 14
     (plan `260806-0938-d14-aie1-node-executors-grid-prep`, P1) filled both
@@ -237,7 +241,9 @@ async def run(
     executors: dict[NodeType, NodeExecutor] = {
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
         NodeType.LLM_STEP: LlmStepExecutor(llm, embedding),
-        NodeType.TOOL_CALL: ToolCallExecutor(WhitelistToolDispatch(recipe.agent_config.tool_whitelist)),
+        NodeType.TOOL_CALL: ToolCallExecutor(
+            tool_dispatch if tool_dispatch is not None else WhitelistToolDispatch(recipe.agent_config.tool_whitelist)
+        ),
         NodeType.CONDITION: ConditionExecutor(),
         NodeType.HITL_PAUSE: HitlPauseExecutor(),
         NodeType.END: EndExecutor(),
