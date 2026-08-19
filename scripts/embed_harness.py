@@ -6,8 +6,8 @@ criteria của phase-3). Chỉ 2 thứ sống ở đây:
 
 - `as_embedder` — adapter từ Protocol async-batch `EmbeddingService.embed` sang chữ ký
   đồng bộ 1-text mà `measure_chunk_embed.score()` đang dùng.
-- `load_cases` — nhận **tên** golden (resolve dưới `packages/kb/golden/`) hoặc **đường
-  dẫn** tường minh, để bộ golden trở thành tham số thay vì khoá cứng.
+- `load_cases` — nhận **tên** golden (resolve dưới `packages/kb/src/studio_kb/golden/`) hoặc
+  **đường dẫn** tường minh, để bộ golden trở thành tham số thay vì khoá cứng.
 
 Vì sao registry các impl KHÔNG sống ở đây: nó phải trỏ tới hàm sinh vector của gói kb
 (`embeddings.derive_vector`), mà đưa import đó vào module này thì module hết "thuần
@@ -51,14 +51,17 @@ def as_embedder(service: EmbeddingService) -> Embedder:
 
 
 def _golden_root() -> Path:
-    """`packages/kb/golden/` — từ `embed_harness.py` (…/packages/engine/scripts/) đi lên
-    3 cấp tới gốc repo, khớp `_ROOT` của `measure_chunk_embed.py` (cùng độ sâu file)."""
-    return Path(__file__).resolve().parents[3] / "packages" / "kb" / "golden"
+    """`packages/kb/src/studio_kb/golden/` — từ `embed_harness.py` (…/packages/engine/scripts/)
+    đi lên 3 cấp tới gốc repo, khớp `_ROOT` của `measure_chunk_embed.py` (cùng độ sâu file).
+
+    `kb#37`/`kit#181`: `golden/` dời vào trong `src/studio_kb/` để đóng gói được vào wheel —
+    trước đó nằm cạnh `src/`, ngoài phạm vi wheel."""
+    return Path(__file__).resolve().parents[3] / "packages" / "kb" / "src" / "studio_kb" / "golden"
 
 
 def load_cases(golden: str | Path) -> list[dict[str, Any]]:
     """Nạp case DƯƠNG (có `expected_citation`) từ golden — tên (resolve dưới
-    `packages/kb/golden/`) hoặc đường dẫn tường minh.
+    `packages/kb/src/studio_kb/golden/`) hoặc đường dẫn tường minh.
 
     `import yaml` đặt TRONG hàm (lazy) — chủ ý — để module này import được ở môi trường
     không cài PyYAML; chỉ lúc thật sự gọi `load_cases` mới cần dep đó.
