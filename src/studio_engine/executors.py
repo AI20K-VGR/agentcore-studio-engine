@@ -410,7 +410,7 @@ def _parse_literal(raw: str) -> object:
     value token."""
     try:
         return json.loads(raw)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return raw
 
 
