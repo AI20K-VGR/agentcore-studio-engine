@@ -183,6 +183,31 @@ async def test_tool_call_dispatches_whitelisted() -> None:
         await ToolCallExecutor(WhitelistToolDispatch(["search_docs"])).execute(bad_node)
 
 
+async def test_tool_call_passes_full_node_params_to_dispatch() -> None:
+    """engine#32: `ToolDispatch.dispatch` widened from `(tool)` to
+    `(tool, params)` — `calculator`/`current_datetime` need args
+    (`expression`, `mode`, ...) that only `node.params` carries, `tool` alone
+    cannot. Locks that `ToolCallExecutor.execute` forwards the WHOLE
+    `node.params` dict (not a stripped/renamed subset) to `dispatch`."""
+
+    class _RecordingDispatch:
+        def __init__(self) -> None:
+            self.seen: tuple[str, dict[str, object]] | None = None
+
+        async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+            self.seen = (tool, params)
+            return {"tool": tool}
+
+    dispatcher = _RecordingDispatch()
+    node = Node(
+        id="n3d",
+        type=NodeType.TOOL_CALL,
+        params={"tool": "calculator", "expression": "2+2"},
+    )
+    await ToolCallExecutor(dispatcher).execute(node)
+    assert dispatcher.seen == ("calculator", {"tool": "calculator", "expression": "2+2"})
+
+
 async def test_tool_call_no_dispatcher_still_not_implemented() -> None:
     """`ToolCallExecutor()` (0-arg, `dispatcher=None` default) must still raise
     `NotImplementedError` — the pre-phase-1 call shape (locked previously by

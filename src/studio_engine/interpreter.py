@@ -64,6 +64,7 @@ from studio_engine.executors import (
     LlmStepExecutor,
     NodeExecutor,
     ToolCallExecutor,
+    ToolDispatch,
 )
 from studio_engine.session import SessionContext
 
@@ -165,6 +166,7 @@ async def run(
     llm: LLM,
     embedding: EmbeddingService,
     trace_writer: TraceWriter,
+    tool_dispatch: ToolDispatch | None = None,
 ) -> RunResult:
     """Walk `recipe.dag` from its single start node, following `dag.edges`
     node-by-node, until an `end` node executes.
@@ -189,8 +191,13 @@ async def run(
 
     Constructs all 6 executors explicitly (constructor-DI, plan decision
     #2 — NOT a generic factory): `KbRetrieveExecutor(kb_search)`,
-    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with a
-    `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)`,
+    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with
+    `tool_dispatch` if the caller passed one (engine#32 — production
+    composition roots, e.g. `apps/studio`, always inject their own real
+    `ToolDispatch`), else falling back to
+    `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)` (kept as the
+    engine-internal default so the pre-engine#32 call shape — no
+    `tool_dispatch` kwarg — stays valid for every existing caller/test),
     `ConditionExecutor()`, `HitlPauseExecutor()`, and `EndExecutor()`. Day 14
     (plan `260806-0938-d14-aie1-node-executors-grid-prep`, P1) filled both
     `ConditionExecutor.execute` and `HitlPauseExecutor.execute` — neither
@@ -237,7 +244,9 @@ async def run(
     executors: dict[NodeType, NodeExecutor] = {
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
         NodeType.LLM_STEP: LlmStepExecutor(llm, embedding),
-        NodeType.TOOL_CALL: ToolCallExecutor(WhitelistToolDispatch(recipe.agent_config.tool_whitelist)),
+        NodeType.TOOL_CALL: ToolCallExecutor(
+            tool_dispatch or WhitelistToolDispatch(recipe.agent_config.tool_whitelist)
+        ),
         NodeType.CONDITION: ConditionExecutor(),
         NodeType.HITL_PAUSE: HitlPauseExecutor(),
         NodeType.END: EndExecutor(),

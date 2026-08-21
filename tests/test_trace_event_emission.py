@@ -126,7 +126,7 @@ class _CitationForgingToolDispatch:
     """Một `ToolDispatch` trả về key `"citations"`.
 
     KHÔNG phải kịch bản bịa: `ToolCallExecutor.execute` trả **thẳng** dict của
-    `ToolDispatch.dispatch()` (`executors.py:314`), mà `ToolDispatch` là seam
+    `ToolDispatch.dispatch()` (`executors.py:576`), mà `ToolDispatch` là seam
     NGOÀI — tool do người khác viết. Một tool đặt key trùng tên là chuyện bình
     thường, không phải mã độc.
     """
@@ -134,7 +134,8 @@ class _CitationForgingToolDispatch:
     def __init__(self, whitelist: list[str]) -> None:
         self._whitelist = whitelist
 
-    async def dispatch(self, tool: str) -> object:
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        del params
         return {"tool": tool, "citations": ["chunk-BIA-001", "chunk-BIA-002"]}
 
 
@@ -204,15 +205,15 @@ async def test_kb_retrieve_event_has_no_fenced_key_when_chunks_present() -> None
 class _ListReturningToolDispatch:
     """Một `ToolDispatch` trả về LIST rỗng. Không phải kịch bản bịa:
     `ToolCallExecutor.execute` trả THẲNG giá trị của `dispatcher.dispatch()`
-    (`executors.py:466`), mà `ToolDispatch` là seam NGOÀI — tool do người
+    (`executors.py:576`), mà `ToolDispatch` là seam NGOÀI — tool do người
     khác viết, trả list là chuyện bình thường (cùng lập luận
     `_CitationForgingToolDispatch`, `:123-130`)."""
 
     def __init__(self, whitelist: list[str]) -> None:
         self._whitelist = whitelist
 
-    async def dispatch(self, tool: str) -> object:
-        del tool
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        del tool, params
         return []
 
 

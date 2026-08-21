@@ -200,17 +200,21 @@ class StubEmbedding:
 
 
 class WhitelistToolDispatch:
-    """Day 3 demo-only — Day 6 replaces with real composition in
-    `apps/studio`. Stub `tool-call` dispatcher: raises `ValueError` for a
-    tool outside `whitelist`, else returns the stub-dispatched marker
-    consumed as-is by `ToolCallExecutor.execute` (defense-in-depth alongside
-    the recipe-validator layer, see `executors.py::ToolCallExecutor`).
+    """Real composition now lives one layer up, in `apps/studio`'s
+    `RealToolDispatch` (`providers/tool_dispatch.py`, engine#32) — this
+    class stays as `interpreter.run()`'s engine-internal FALLBACK dispatcher
+    for callers that don't inject `tool_dispatch` (mainly `packages/engine`'s
+    own tests; production composition roots always inject the real one).
+    Stub `tool-call` dispatcher: raises `ValueError` for a tool outside
+    `whitelist`, else returns the stub-dispatched marker consumed as-is by
+    `ToolCallExecutor.execute` (defense-in-depth alongside the
+    recipe-validator layer, see `executors.py::ToolCallExecutor`).
     """
 
     def __init__(self, whitelist: list[str]) -> None:
         self._whitelist = whitelist
 
-    async def dispatch(self, tool: str) -> object:
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
         if tool not in self._whitelist:
             raise ValueError(f"tool not in whitelist: {tool}")
         return {"tool": tool, "status": "stub-dispatched"}
