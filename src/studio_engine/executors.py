@@ -530,13 +530,19 @@ class ToolDispatch(Protocol):
     tool-dispatch seam; this is `studio_engine`'s own, same as `NodeExecutor`
     above). `ToolCallExecutor`'s constructor is not frozen by any contract
     test, so this DI param was free to add here (unlike
-    `KbRetrieveExecutor`/`LlmStepExecutor`, whose constructors are locked)."""
+    `KbRetrieveExecutor`/`LlmStepExecutor`, whose constructors are locked).
 
-    async def dispatch(self, tool: str) -> object: ...
+    `dispatch` takes `params` (engine#32) — the tool's own args (e.g.
+    `calculator`'s `expression`, `current_datetime`'s `mode`/`from_date`/
+    `to_date`) live in `node.params` alongside `"tool"`, and a real
+    dispatcher needs them; the tool name alone (pre-engine#32 shape) cannot
+    carry them."""
+
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object: ...
 
 
 class ToolCallExecutor:
-    """`tool-call` node — dispatches a tool stub strictly within
+    """`tool-call` node — dispatches a tool strictly within
     `agent_config.tool_whitelist` (rule-verdict/matching). SWE co-owns
     whitelist enforcement at the recipe-validator layer; a tool outside the
     whitelist must never execute here either (defense in depth, spec AIE-1,
@@ -546,24 +552,28 @@ class ToolCallExecutor:
         self._dispatcher = dispatcher
 
     async def execute(self, node: Node) -> object:
-        """Output shape (v0 stub): `{"tool": <name>, "status":
-        "stub-dispatched"}` for a tool in the dispatcher's whitelist; the
-        dispatcher RAISES for a tool outside it (defense-in-depth — the
-        recipe-validator layer is the primary whitelist enforcement, this is
-        the second belt, same pattern as the closed-`NodeType` registry
-        guard). No dispatcher wired at construction (`dispatcher=None`, the
-        default — kept so `ToolCallExecutor()`'s pre-phase-1 0-arg call shape
-        stays valid, per `test_interpreter_contract.py::
-        test_each_executor_not_implemented`, frozen/not this phase's to
-        touch) still raises `NotImplementedError`, same as before this
-        phase filled the body."""
+        """Output shape depends on the dispatcher: real dispatchers (engine#32
+        — `apps/studio`'s `RealToolDispatch`) return e.g. `{"expression",
+        "result"}` for `calculator`; the engine-internal fallback stub
+        (`WhitelistToolDispatch`) returns `{"tool": <name>, "status":
+        "stub-dispatched"}`. Either way the dispatcher RAISES for a tool
+        outside its whitelist (defense-in-depth — the recipe-validator layer
+        is the primary whitelist enforcement, this is the second belt, same
+        pattern as the closed-`NodeType` registry guard). No dispatcher wired
+        at construction (`dispatcher=None`, the default — kept so
+        `ToolCallExecutor()`'s pre-phase-1 0-arg call shape stays valid, per
+        `test_tool_call_no_dispatcher_still_not_implemented`) still raises
+        `NotImplementedError`, same as before this phase filled the body.
+        `node.params` (minus nothing — the whole dict, `"tool"` key
+        included) is passed through to `dispatch()` so the tool's own args
+        reach the dispatcher (engine#32)."""
         if self._dispatcher is None:
             raise NotImplementedError(
                 "spec AIE-1: tool-call executor requires a dispatcher collaborator — see R-SPEC A2"
             )
         raw_tool = node.params.get("tool", "")
         tool = raw_tool if isinstance(raw_tool, str) else str(raw_tool)
-        return await self._dispatcher.dispatch(tool)
+        return await self._dispatcher.dispatch(tool, node.params)
 
 
 class HitlPauseExecutor:

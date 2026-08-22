@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from uuid import UUID
 
+import pytest
 from studio_contracts import (
     AgentConfig,
     Dag,
@@ -148,3 +149,79 @@ async def test_run_terminates_at_end() -> None:
 
     assert list(result.final_state.keys()) == ["n_kb", "n_llm", "n_tool", "n_end"]
     assert len(result.final_state) == 4
+
+
+# --------------------------------------------------------------------------
+# engine#35 review fixup (@dholmes0207): `tool_dispatch` injection had 0 test
+# coverage at the `run()` level — both `ToolCallExecutor(dispatcher)` tests
+# in `test_executors_behavior.py` bypass `run()` entirely. These 2 tests
+# close that gap and lock the 2 review findings.
+# --------------------------------------------------------------------------
+
+
+class _FalsyButRealDispatch:
+    """`__len__` makes `bool(this) is False` — the exact shape the review
+    flagged: a table-backed dispatcher (e.g. a `TOOL_REGISTRY` dict-like
+    object) is a realistic way to end up falsy without being invalid."""
+
+    def __len__(self) -> int:
+        return 0
+
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        del params
+        return {"tool": tool, "status": "real-dispatched"}
+
+
+async def test_run_uses_injected_dispatcher_even_when_falsy() -> None:
+    """Locks the `or` -> `is not None` fix: a falsy-but-valid injected
+    dispatcher must still be used for real, never silently swapped for the
+    `WhitelistToolDispatch` fallback (`tool_dispatch or WhitelistToolDispatch(...)`
+    picked the fallback here pre-fix, because `bool(_FalsyButRealDispatch()) is
+    False`)."""
+    result = await interpreter.run(
+        _four_node_recipe(),
+        session_context=default_session_context(),
+        kb_search=EmptyKbSearch(),
+        llm=FixtureLLM("smoke-01"),
+        embedding=EmptyEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+        tool_dispatch=_FalsyButRealDispatch(),
+    )
+    assert result.final_state["n_tool"] == {"tool": _TOOL_NAME, "status": "real-dispatched"}
+
+
+class _PermissiveNoWhitelistDispatch:
+    """No whitelist check of its own — the exact caller class the review's
+    `shell_exec`/`rm -rf /` scenario used to demonstrate belt 2 silently
+    depending on caller convention once a dispatcher is injected."""
+
+    def __init__(self) -> None:
+        self.called = False
+
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        self.called = True
+        return {"tool": tool, "DA_CHAY_THAT": True, "params": params}
+
+
+async def test_run_enforces_whitelist_on_injected_dispatcher_regardless_of_its_own_checks() -> None:
+    """Locks the `_WhitelistGuardedDispatch` fix (option a): `run()` itself
+    must reject a tool outside `agent_config.tool_whitelist` even when the
+    injected dispatcher performs no whitelist check of its own — belt 2
+    (R-SPEC A2) holds structurally, not by caller convention. The permissive
+    dispatcher's `dispatch()` must never even be reached."""
+    recipe = _four_node_recipe()
+    tool_node = next(n for n in recipe.dag.nodes if n.id == "n_tool")
+    tool_node.params["tool"] = "shell_exec"  # not in agent_config.tool_whitelist ([_TOOL_NAME])
+
+    dispatcher = _PermissiveNoWhitelistDispatch()
+    with pytest.raises(ValueError, match="tool not in whitelist: shell_exec"):
+        await interpreter.run(
+            recipe,
+            session_context=default_session_context(),
+            kb_search=EmptyKbSearch(),
+            llm=FixtureLLM("smoke-01"),
+            embedding=EmptyEmbedding(),
+            trace_writer=_NoOpTraceWriter(),
+            tool_dispatch=dispatcher,
+        )
+    assert dispatcher.called is False, "the whitelist check must happen before the injected dispatcher is ever called"

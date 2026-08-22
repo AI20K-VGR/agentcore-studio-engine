@@ -109,8 +109,8 @@ hoàn tất. Ghim ở `tests/test_fixture_missing_fails_loud.py`.
 end`, `studio_engine.__main__.build_demo_recipe()`) qua `interpreter.run()`, wire với 4 collaborator
 demo-only trong `studio_engine.demo_stubs` (`EmptyKbSearch`/`FixtureLLM`/`EmptyEmbedding`/
 `WhitelistToolDispatch`), in `final_state` ra JSON. Đây là walking-skeleton demo — không phải
-composition thật (`apps/studio` thay bằng collaborator production sau, xem docstring
-`demo_stubs.py`). 6/6 node-executor (`KbRetrieveExecutor`/`LlmStepExecutor`/`ToolCallExecutor`/
+composition thật (`apps/studio` đã thay bằng collaborator production, engine#32/`agentcore-studio-app#41`,
+xem docstring `demo_stubs.py`). 6/6 node-executor (`KbRetrieveExecutor`/`LlmStepExecutor`/`ToolCallExecutor`/
 `EndExecutor`/`ConditionExecutor`/`HitlPauseExecutor`) đã điền thân thật, không còn
 `NotImplementedError`. Giới hạn còn lại: `HitlPauseExecutor` mới trả hình dạng pause
 (`{"paused": True, "status": "pending_approval"}`) — INV-2 (dừng/resume thật qua playground) chưa

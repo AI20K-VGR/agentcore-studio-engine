@@ -64,6 +64,7 @@ from studio_engine.executors import (
     LlmStepExecutor,
     NodeExecutor,
     ToolCallExecutor,
+    ToolDispatch,
 )
 from studio_engine.session import SessionContext
 
@@ -141,6 +142,30 @@ def _build_edge_map(edges: list[Edge]) -> dict[str, Edge]:
     return edge_by_id
 
 
+class _WhitelistGuardedDispatch:
+    """Belt 2 (spec AIE-1, R-SPEC A2) must hold structurally no matter what
+    the caller injects — not merely by caller convention (finding
+    @dholmes0207, engine#35 review: once a caller supplies its own
+    `tool_dispatch`, `recipe.agent_config.tool_whitelist` previously went
+    nowhere inside this package, and `ToolCallExecutor`'s own docstring
+    claim — "the dispatcher RAISES for a tool outside its whitelist" —
+    silently became false for that caller). Wraps whichever `ToolDispatch`
+    `run()` ends up with (injected or the `WhitelistToolDispatch` fallback)
+    so the whitelist check always runs inside `packages/engine`, before the
+    inner dispatcher ever sees the tool name. Wrapping the fallback stub too
+    is deliberate redundancy (same list, checked twice) — one code path, no
+    special-casing which dispatcher source needs the guard."""
+
+    def __init__(self, inner: ToolDispatch, whitelist: list[str]) -> None:
+        self._inner = inner
+        self._whitelist = whitelist
+
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        if tool not in self._whitelist:
+            raise ValueError(f"tool not in whitelist: {tool}")
+        return await self._inner.dispatch(tool, params)
+
+
 @dataclass(frozen=True)
 class RunResult:
     """`interpreter.run()`'s return shape. This is `studio_engine`'s own
@@ -165,6 +190,7 @@ async def run(
     llm: LLM,
     embedding: EmbeddingService,
     trace_writer: TraceWriter,
+    tool_dispatch: ToolDispatch | None = None,
 ) -> RunResult:
     """Walk `recipe.dag` from its single start node, following `dag.edges`
     node-by-node, until an `end` node executes.
@@ -189,9 +215,19 @@ async def run(
 
     Constructs all 6 executors explicitly (constructor-DI, plan decision
     #2 — NOT a generic factory): `KbRetrieveExecutor(kb_search)`,
-    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with a
-    `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)`,
-    `ConditionExecutor()`, `HitlPauseExecutor()`, and `EndExecutor()`. Day 14
+    `LlmStepExecutor(llm, embedding)`, a `ToolCallExecutor` wired with
+    `tool_dispatch` if the caller passed one (engine#32 — production
+    composition roots, e.g. `apps/studio`, always inject their own real
+    `ToolDispatch`), else falling back to
+    `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)` (kept as the
+    engine-internal default so the pre-engine#32 call shape — no
+    `tool_dispatch` kwarg — stays valid for every existing caller/test).
+    Either way, that dispatcher is wrapped in `_WhitelistGuardedDispatch`
+    (engine#35 review fixup) so `recipe.agent_config.tool_whitelist` is
+    enforced by `run()` itself regardless of what the caller injected — belt
+    2 (R-SPEC A2) no longer depends on the injected dispatcher choosing to
+    check it. `ConditionExecutor()`, `HitlPauseExecutor()`, and
+    `EndExecutor()` round out the 6. Day 14
     (plan `260806-0938-d14-aie1-node-executors-grid-prep`, P1) filled both
     `ConditionExecutor.execute` and `HitlPauseExecutor.execute` — neither
     raises `NotImplementedError` anymore, so a recipe that routes through
@@ -237,7 +273,14 @@ async def run(
     executors: dict[NodeType, NodeExecutor] = {
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
         NodeType.LLM_STEP: LlmStepExecutor(llm, embedding),
-        NodeType.TOOL_CALL: ToolCallExecutor(WhitelistToolDispatch(recipe.agent_config.tool_whitelist)),
+        NodeType.TOOL_CALL: ToolCallExecutor(
+            _WhitelistGuardedDispatch(
+                tool_dispatch
+                if tool_dispatch is not None
+                else WhitelistToolDispatch(recipe.agent_config.tool_whitelist),
+                recipe.agent_config.tool_whitelist,
+            )
+        ),
         NodeType.CONDITION: ConditionExecutor(),
         NodeType.HITL_PAUSE: HitlPauseExecutor(),
         NodeType.END: EndExecutor(),

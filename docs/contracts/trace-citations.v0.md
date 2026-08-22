@@ -54,7 +54,7 @@ là **hành vi tình cờ đúng** vì hôm nay chỉ `LlmStepExecutor` đặt k
 Hai bằng chứng cho thấy nó không phải lo xa:
 
 1. **Lỗ có thật, ở một seam ngoài.** `ToolCallExecutor.execute` trả **thẳng** dict của
-   `ToolDispatch.dispatch()` (`executors.py:314`). `ToolDispatch` là Protocol — tool do bên khác viết.
+   `ToolDispatch.dispatch()` (`executors.py:576`). `ToolDispatch` là Protocol — tool do bên khác viết.
    Một tool đặt key `"citations"` là chuyện bình thường, không cần ác ý, và trước C-1 nó đi thẳng vào
    trace như trích dẫn thật.
 2. **Không lớp nào bên tiêu thụ bắt được.** Mutation **M1** của @dholmes0207
