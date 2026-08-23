@@ -7,6 +7,7 @@ emit + the 6 executor bodies) is AIE-1's own OJT deliverable, landing after this
 
 from __future__ import annotations
 
+from studio_engine.agent_loop import run_agent_loop
 from studio_engine.executors import (
     ConditionExecutor,
     EndExecutor,
@@ -33,4 +34,5 @@ __all__ = [
     "ToolCallExecutor",
     "get_executor_class",
     "run",
+    "run_agent_loop",
 ]

@@ -63,11 +63,13 @@ def _rel(path: Path) -> str:
         return path.name
 
 
-def _load_fixture(kind: str, fixtures_dir: Path, case_id: str) -> dict[str, object]:
-    """Read + parse `<fixtures_dir>/<case_id>.json` and guarantee a `response`
-    key exists. Shared by both replay stubs so the two fixture families
-    (`llm_step`, `embedding`) cannot drift apart on failure behavior — the
-    caller only has to type-check `response` for its own protocol.
+def _load_fixture(kind: str, fixtures_dir: Path, case_id: str, required_key: str = "response") -> dict[str, object]:
+    """Read + parse `<fixtures_dir>/<case_id>.json` and guarantee
+    `required_key` exists. Shared by all replay stubs so the fixture families
+    (`llm_step`, `embedding`, and — engine#33 phase 3 — `agent_loop`, whose
+    multi-turn recordings key off `"responses"` rather than singular
+    `"response"`) cannot drift apart on failure behavior — the caller only has
+    to type-check its own key for its own protocol.
 
     `raise ... from exc` throughout: the underlying OSError/JSONDecodeError
     stays on the chain, so wrapping adds context without hiding the cause.
@@ -89,9 +91,9 @@ def _load_fixture(kind: str, fixtures_dir: Path, case_id: str) -> dict[str, obje
         raise FixtureError(
             f"{kind} fixture {case_id!r} at {_rel(fixture_path)} must be a JSON object, got {type(data).__name__!r}."
         )
-    if "response" not in data:
+    if required_key not in data:
         raise FixtureError(
-            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} has no 'response' key — that key holds "
+            f"{kind} fixture {case_id!r} at {_rel(fixture_path)} has no {required_key!r} key — that key holds "
             'the recorded return value being replayed; see README.md "Fixture format".'
         )
     return data
@@ -197,6 +199,72 @@ class StubEmbedding:
                 "return 1 vector per input text, which is impossible with none recorded."
             )
         return [list(vectors[i % len(vectors)]) for i in range(len(texts))]
+
+
+_AGENT_LOOP_FIXTURES_DIR = _ENGINE_ROOT / "tests" / "fixtures" / "agent_loop"
+
+
+class ToolCallingFixtureLLM:
+    """engine#33 phase 3 (H3/R2) — VCR-style replay, same convention as
+    `FixtureLLM` above, but of a MULTI-turn scripted conversation rather than
+    a single answer: `tests/fixtures/agent_loop/<case_id>.json`'s `responses`
+    is a list of strings, call N of `complete()` returns `responses[N]`.
+
+    Exists specifically so `agent_loop.run_agent_loop()`'s tool-call branch is
+    driven by a real, non-test-local, product-shipped `LLM` double — as of
+    this phase every OTHER `LLM` impl in the workspace (`FixtureLLM` here,
+    `_GoldenAwareLLM`, `ExtractiveFakeLLM`) only ever emits bare prose with
+    `[chunk_id]` brackets, never a `TOOL_CALL:` signal, which would leave the
+    tool-call branch reachable only from test-local doubles — an INERT
+    feature under every real demo/CLI/manual run configuration (plan.md R2).
+
+    Day 9 harden semantics carried over unchanged (`FixtureError`, see
+    `_load_fixture`): calling past the recorded `responses` list is a FAIL
+    LOUD `FixtureError`, never a silent repeat of the last element — a
+    recording that cannot replay the exact conversation length asked of it is
+    a broken recording, and silently looping would turn a genuine
+    over-max_turns bug into a false-green run.
+
+    Deliberately NOT added to `executors._KNOWN_STUB_LLM_CLASS_NAMES`
+    (engine#33 phase 3 scope note): this loop does not emit `llm_source` at
+    all (out of scope, see plan.md), and touching that set would change
+    `LlmStepExecutor`'s behavior — i.e. `interpreter.run()`'s behavior — which
+    is exactly what K2 forbids.
+    """
+
+    def __init__(self, case_id: str) -> None:
+        self._case_id = case_id
+        self._calls = 0
+
+    async def complete(self, prompt: str, **kwargs: object) -> str:
+        del prompt, kwargs
+        data = _load_fixture("agent_loop", _AGENT_LOOP_FIXTURES_DIR, self._case_id, required_key="responses")
+        raw_responses = data["responses"]
+        if not isinstance(raw_responses, list) or not raw_responses:
+            raise FixtureError(
+                f"agent_loop fixture {self._case_id!r} needs a non-empty JSON list of strings in "
+                f"'responses' (got {type(raw_responses).__name__!r}) — each element replays 1 turn of "
+                "`LLM.complete()`."
+            )
+        # Narrow to `list[str]` explicitly (a generator-expression `all(...)`
+        # check does not narrow the list's element type for mypy strict) — a
+        # non-str element makes the filtered length shorter than the raw one.
+        responses = [item for item in raw_responses if isinstance(item, str)]
+        if len(responses) != len(raw_responses):
+            raise FixtureError(
+                f"agent_loop fixture {self._case_id!r} has a non-string element in 'responses' — every "
+                "element must replay 1 `LLM.complete()` turn as a string."
+            )
+        if self._calls >= len(responses):
+            raise FixtureError(
+                f"agent_loop fixture {self._case_id!r} has only {len(responses)} recorded turn(s), "
+                f"but complete() was called a {self._calls + 1}th time — a recording that cannot "
+                "replay the exact conversation length asked of it is broken; this does NOT silently "
+                "repeat the last element (that would mask a genuine over-max_turns bug as green)."
+            )
+        response = responses[self._calls]
+        self._calls += 1
+        return response
 
 
 class WhitelistToolDispatch:
