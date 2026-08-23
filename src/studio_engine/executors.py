@@ -541,6 +541,35 @@ class ToolDispatch(Protocol):
     async def dispatch(self, tool: str, params: dict[str, object]) -> object: ...
 
 
+class WhitelistGuardedDispatch:
+    """Belt 2 (spec AIE-1, R-SPEC A2) must hold structurally no matter what
+    the caller injects — not merely by caller convention (finding
+    @dholmes0207, engine#35 review: once a caller supplies its own
+    `tool_dispatch`, `recipe.agent_config.tool_whitelist` previously went
+    nowhere inside this package, and `ToolCallExecutor`'s own docstring
+    claim — "the dispatcher RAISES for a tool outside its whitelist" —
+    silently became false for that caller). Wraps whichever `ToolDispatch`
+    `run()` ends up with (injected or the `WhitelistToolDispatch` fallback)
+    so the whitelist check always runs inside `packages/engine`, before the
+    inner dispatcher ever sees the tool name. Wrapping the fallback stub too
+    is deliberate redundancy (same list, checked twice) — one code path, no
+    special-casing which dispatcher source needs the guard.
+
+    Moved here from `interpreter.py` (engine#33 phase 2, made module-public —
+    was module-private with a leading underscore) so `agent_loop.run_agent_loop()`
+    (phase 3) can reuse it without importing a private name across modules;
+    logic is unchanged, copied verbatim."""
+
+    def __init__(self, inner: ToolDispatch, whitelist: list[str]) -> None:
+        self._inner = inner
+        self._whitelist = whitelist
+
+    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
+        if tool not in self._whitelist:
+            raise ValueError(f"tool not in whitelist: {tool}")
+        return await self._inner.dispatch(tool, params)
+
+
 class ToolCallExecutor:
     """`tool-call` node — dispatches a tool strictly within
     `agent_config.tool_whitelist` (rule-verdict/matching). SWE co-owns

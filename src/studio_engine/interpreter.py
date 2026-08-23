@@ -65,7 +65,9 @@ from studio_engine.executors import (
     NodeExecutor,
     ToolCallExecutor,
     ToolDispatch,
+    WhitelistGuardedDispatch,
 )
+from studio_engine.fence import fenced_kb_params
 from studio_engine.session import SessionContext
 
 # Day 5 (out of scope for cost-lineage — obs.costs stays a schema-shell until
@@ -142,30 +144,6 @@ def _build_edge_map(edges: list[Edge]) -> dict[str, Edge]:
     return edge_by_id
 
 
-class _WhitelistGuardedDispatch:
-    """Belt 2 (spec AIE-1, R-SPEC A2) must hold structurally no matter what
-    the caller injects — not merely by caller convention (finding
-    @dholmes0207, engine#35 review: once a caller supplies its own
-    `tool_dispatch`, `recipe.agent_config.tool_whitelist` previously went
-    nowhere inside this package, and `ToolCallExecutor`'s own docstring
-    claim — "the dispatcher RAISES for a tool outside its whitelist" —
-    silently became false for that caller). Wraps whichever `ToolDispatch`
-    `run()` ends up with (injected or the `WhitelistToolDispatch` fallback)
-    so the whitelist check always runs inside `packages/engine`, before the
-    inner dispatcher ever sees the tool name. Wrapping the fallback stub too
-    is deliberate redundancy (same list, checked twice) — one code path, no
-    special-casing which dispatcher source needs the guard."""
-
-    def __init__(self, inner: ToolDispatch, whitelist: list[str]) -> None:
-        self._inner = inner
-        self._whitelist = whitelist
-
-    async def dispatch(self, tool: str, params: dict[str, object]) -> object:
-        if tool not in self._whitelist:
-            raise ValueError(f"tool not in whitelist: {tool}")
-        return await self._inner.dispatch(tool, params)
-
-
 @dataclass(frozen=True)
 class RunResult:
     """`interpreter.run()`'s return shape. This is `studio_engine`'s own
@@ -222,7 +200,7 @@ async def run(
     `WhitelistToolDispatch(recipe.agent_config.tool_whitelist)` (kept as the
     engine-internal default so the pre-engine#32 call shape — no
     `tool_dispatch` kwarg — stays valid for every existing caller/test).
-    Either way, that dispatcher is wrapped in `_WhitelistGuardedDispatch`
+    Either way, that dispatcher is wrapped in `WhitelistGuardedDispatch`
     (engine#35 review fixup) so `recipe.agent_config.tool_whitelist` is
     enforced by `run()` itself regardless of what the caller injected — belt
     2 (R-SPEC A2) no longer depends on the injected dispatcher choosing to
@@ -274,7 +252,7 @@ async def run(
         NodeType.KB_RETRIEVE: KbRetrieveExecutor(kb_search),
         NodeType.LLM_STEP: LlmStepExecutor(llm, embedding),
         NodeType.TOOL_CALL: ToolCallExecutor(
-            _WhitelistGuardedDispatch(
+            WhitelistGuardedDispatch(
                 tool_dispatch
                 if tool_dispatch is not None
                 else WhitelistToolDispatch(recipe.agent_config.tool_whitelist),
@@ -322,53 +300,15 @@ async def run(
         node_type = node.type
         if node_type is NodeType.KB_RETRIEVE:
             # Thread the SESSION's tenant identity AND scope (Day 8 INV-1 /
-            # Day 17 T6 label-spoof) down into the `kb-retrieve` executor
-            # (same inject-into-params pattern used for `retrieved_chunks`
-            # below) — never the recipe's own tenant/section_roles fields,
-            # which are client-declared (`section_roles` in particular comes
-            # from `_parse_kb_scope` parsing the workbench recipe's
-            # `kb_binding.scope` string, `builder.py:32-80` ->
-            # `:207-216`/`:278-287`) and exactly the values these fences must
-            # not trust.
-            # Both overrides are set AFTER the `**node.params` spread on
-            # purpose: whatever a client-authored node already carries in its
-            # own params (the workbench recipe only ever puts a tenant SLUG
-            # there, never a UUID, but nothing stops a hand-crafted recipe
-            # from putting a UUID; same for a `section_roles` list) is always
-            # OVERWRITTEN by the session's, never merely supplemented — a
-            # missing/malformed `tenant_id` post-override still fails closed
-            # at `KbRetrieveExecutor` (`isinstance(..., UUID)`-check, raises
-            # `PermissionError`, see `executors.py`), it does not fall back
-            # to a sentinel (that fallback was removed, Day 8 phase 2).
-            #
-            # `section_roles` (Day 17, plan 260811-1121-d17, QĐ-7): `[]` is
-            # already deny-all at retrieval (`static_search.py`: `allowed =
-            # set(section_roles)`, no match -> 0 chunks) so there is no
-            # `PermissionError` branch here the way there is for `tenant_id`
-            # — but the raw value still needs EXPLICIT normalization, not a
-            # bare `list(raw_roles)`. Probed for real (not assumed):
-            # `list("public")` -> `['p','u','b','l','i','c']` (6 garbage
-            # roles — a WIDENING of scope, not deny-all), and `list(None)`
-            # raises `TypeError` mid-walk with nothing to catch it. Both are
-            # worse than a clean fail-closed `[]`. The real `resolve_session`
-            # (SWE, `tenant_wall.py:184-195`) already normalizes, so
-            # production never hits this; a test double that mis-declares
-            # `.roles` can. QĐ-5: values are passed through UNCHANGED after
-            # type coercion — no sort, no dedupe, no `"public"` injection, no
-            # `SECTION_VOCAB` validation (that vocabulary belongs to DE,
-            # `.importlinter` forbids `studio_engine` importing `studio_kb`
-            # anyway).
-            raw_roles = session_context.roles
-            session_roles = [str(r) for r in raw_roles] if isinstance(raw_roles, list) else []
-            node = node.model_copy(
-                update={
-                    "params": {
-                        **node.params,
-                        "tenant_id": session_context.tenant_id,
-                        "section_roles": session_roles,
-                    }
-                }
-            )
+            # Day 17 T6 label-spoof) down into the `kb-retrieve` executor —
+            # never the recipe's own client-declared tenant/section_roles
+            # fields. engine#33 phase 2: this override used to be inline here
+            # (~45 lines); now shared with `agent_loop.run_agent_loop()`
+            # (phase 3) via `studio_engine.fence.fenced_kb_params` — see that
+            # function's docstring for the full rationale (probed
+            # `list("public")`/`list(None)` evidence, QĐ-5, QĐ-7, D8 INV-1)
+            # this refactor did not drop, only relocate.
+            node = node.model_copy(update={"params": fenced_kb_params(node.params, session_context)})
         if node_type is NodeType.LLM_STEP:
             node = node.model_copy(
                 update={
