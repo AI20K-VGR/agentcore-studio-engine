@@ -1,0 +1,6 @@
+{
+  "responses": [
+    "TOOL_CALL: {\"tool\": \"kb_search\", \"params\": {\"query\": \"test question\"}}",
+    "Theo tài liệu đã truy xuất, câu trả lời có căn cứ tại [doc#c1]."
+  ]
+}

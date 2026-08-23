@@ -204,7 +204,7 @@ class _PermissiveNoWhitelistDispatch:
 
 
 async def test_run_enforces_whitelist_on_injected_dispatcher_regardless_of_its_own_checks() -> None:
-    """Locks the `_WhitelistGuardedDispatch` fix (option a): `run()` itself
+    """Locks the `WhitelistGuardedDispatch` fix (option a): `run()` itself
     must reject a tool outside `agent_config.tool_whitelist` even when the
     injected dispatcher performs no whitelist check of its own — belt 2
     (R-SPEC A2) holds structurally, not by caller convention. The permissive
