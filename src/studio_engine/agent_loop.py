@@ -97,6 +97,7 @@ from studio_contracts import (
     TraceEvent,
     TraceWriter,
 )
+from studio_contracts.cost import cost_of
 
 from studio_engine.agent_protocol import (
     KB_SEARCH_TOOL,
@@ -297,7 +298,7 @@ async def run_agent_loop(
                 inputs_hash=_hash_prompt(prompt),
                 outputs=out,
                 tokens=tokens,
-                cost=0.0,
+                cost=cost_of(tokens),
                 citations=citations,
             )
             await trace_writer.write(event)
@@ -326,7 +327,7 @@ async def run_agent_loop(
             inputs_hash=_hash_prompt(prompt),
             outputs=tool_call_out,
             tokens=tokens,
-            cost=0.0,
+            cost=cost_of(tokens),
             citations=None,
         )
         await trace_writer.write(llm_event)
@@ -375,6 +376,7 @@ async def run_agent_loop(
             if not valid_chunks:
                 kb_outputs["fenced"] = True
             last_ts = _bump_ts(last_ts)
+            kb_tokens = Tokens(prompt=0, completion=0)
             kb_event = TraceEvent(
                 event_id=str(uuid.uuid4()),
                 run_id=run_id,
@@ -385,8 +387,8 @@ async def run_agent_loop(
                 ts=last_ts.isoformat(timespec="microseconds"),
                 inputs_hash=_hash_params(fenced_params),
                 outputs=kb_outputs,
-                tokens=Tokens(prompt=0, completion=0),
-                cost=0.0,
+                tokens=kb_tokens,
+                cost=cost_of(kb_tokens),
                 citations=None,
             )
             await trace_writer.write(kb_event)
@@ -410,6 +412,7 @@ async def run_agent_loop(
             result = await tool_exec.execute(tool_node)
             safe_result = _jsonsafe(result)
             last_ts = _bump_ts(last_ts)
+            tool_tokens = Tokens(prompt=0, completion=0)
             tool_event = TraceEvent(
                 event_id=str(uuid.uuid4()),
                 run_id=run_id,
@@ -420,8 +423,8 @@ async def run_agent_loop(
                 ts=last_ts.isoformat(timespec="microseconds"),
                 inputs_hash=_hash_params(tool_params),
                 outputs=safe_result if isinstance(safe_result, dict) else {"result": safe_result},
-                tokens=Tokens(prompt=0, completion=0),
-                cost=0.0,
+                tokens=tool_tokens,
+                cost=cost_of(tool_tokens),
                 citations=None,
             )
             await trace_writer.write(tool_event)
