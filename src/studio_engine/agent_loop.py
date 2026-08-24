@@ -50,9 +50,21 @@ Design decisions locked by `plans/260823-1249-engine33-agent-loop/plan.md`
   `KbRetrieveExecutor` never receives a whitelist, only `ToolCallExecutor`
   does. `recipe.kb_binding` is a REQUIRED field on every `Recipe`
   (`recipe.py:106`), so `kb_search` is structurally always in scope.
-- A5: `refused = (not citations) and (not used_non_kb_tool)` — see the
-  branch below for the full truth table this pins (money-shot cross-tenant
-  case, calculator-only case, mixed case, no-tool case).
+- A5: `refused = used_kb_search and (not citations) and (not used_non_kb_tool)`
+  — see the branch below for the full truth table this pins (money-shot
+  cross-tenant case, calculator-only case, mixed case, no-tool case).
+  `used_kb_search` (engine#37, added after PR review on
+  `agentcore-studio-engine#39` caught the gap: `test_no_tool_direct_answer_is_refused`
+  was locking a direct conversational answer — zero tool calls at all,
+  including `kb_search` — as `refused=True`. That is the exact symptom
+  engine#37 reports, just reached through this loop's OWN formula instead of
+  `LlmStepExecutor`'s `not citations`: this is the real production path now
+  (`agentcore-studio-app#48` moved `routes/chat.py`/`eval_adapter.py` off
+  `interpreter.run()` onto this loop), so fixing only `interpreter.py` left
+  the live symptom unfixed. `used_kb_search` gates the same way
+  `has_kb_upstream` gates `interpreter.py`'s formula (see that module) — a
+  turn that never called `kb_search` never entered the fence-refusal branch
+  this flag exists to measure, so it must not read as one.
 
 Deliberate cross-turn duplication in THIS file (plan.md "Trùng lặp CHẤP NHẬN",
 accepted so `interpreter.py`/`executors.py` stay as untouched as possible per
@@ -229,6 +241,11 @@ async def run_agent_loop(
     observations: list[Observation] = []
     retrieved: list[KbSearchResultItem] = []
     used_non_kb_tool = False
+    # engine#37 — twin flag to `used_non_kb_tool` above, same reason: gates
+    # `refused` so a turn that never called `kb_search` at all cannot read as
+    # a fence-refusal (there was no fence to trigger). See the A5 note in this
+    # module's docstring for the full incident.
+    used_kb_search = False
     events: list[TraceEvent] = []
     state: dict[str, object] = {}
     last_ts: datetime | None = None
@@ -255,7 +272,14 @@ async def run_agent_loop(
             # valid answer can come entirely from a non-KB tool and cite
             # nothing). See plan.md A5 for the full 4-case truth table this
             # pins; do NOT "fix" this back to `not citations`.
-            refused = (not citations) and (not used_non_kb_tool)
+            #
+            # `used_kb_search and` (engine#37): a turn that never called
+            # `kb_search` at all — including the standalone-chatbot shape,
+            # zero tool calls, `agentcore-studio-web#14` — must not read as a
+            # refusal either; `not citations` alone is true there for the same
+            # reason it is true after a fenced-empty `kb_search`, and this
+            # loop cannot tell those two apart without the flag.
+            refused = used_kb_search and (not citations) and (not used_non_kb_tool)
             out: dict[str, object] = {
                 "answer": signal.text,
                 "citations": citations,
@@ -326,6 +350,13 @@ async def run_agent_loop(
             fenced_params = fenced_kb_params({**signal.params, "top_k": top_k}, session_context)
             kb_node = Node(id=f"t{i}-kb-search", type=NodeType.KB_RETRIEVE, params=fenced_params)
             raw_result = await kb_exec.execute(kb_node)
+            # engine#37: set as soon as `kb_search` actually ran, NOT gated on
+            # `valid_chunks` being non-empty — a fenced-to-zero result (the
+            # money-shot SC-04/SC-05 case, `test_empty_kb_retrieval_answer_is_refused`)
+            # must still count as "kb_search ran and found nothing", same as
+            # `interpreter.py`'s `has_kb_upstream` being set unconditionally
+            # once `kb-retrieve` executes, not once it returns chunks.
+            used_kb_search = True
             # Copy of `interpreter.py:425-426`'s filter (same outer `isinstance(...,
             # list)` guard, same inner `isinstance(item, KbSearchResultItem)`) — a
             # non-`KbSearchResultItem` element (a broken double, or a serialize

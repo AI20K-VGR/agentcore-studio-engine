@@ -617,7 +617,17 @@ async def test_empty_kb_retrieval_answer_is_refused() -> None:
     assert final["refused"] is True
 
 
-async def test_no_tool_direct_answer_is_refused() -> None:
+async def test_no_tool_direct_answer_is_not_refused() -> None:
+    """engine#37 (caught by `agentcore-studio-engine#39` review): this used to
+    assert `refused is True` here — a direct conversational answer that never
+    calls ANY tool, not even `kb_search`, is the exact standalone-chatbot
+    shape `agentcore-studio-web#14` shipped (and `interpreter.py`'s
+    `has_kb_upstream` fix already corrected for the DAG-walk path). This loop
+    is the one actually wired into production (`routes/chat.py`,
+    `agentcore-studio-app#48`), so it needed the same correction:
+    `used_kb_search` must be False here (kb_search never ran), so `refused`
+    must be False too — a turn with no tool call at all never entered the
+    fence-refusal branch this flag measures."""
     llm = _ScriptedLLM(["Trả lời chay không dùng tool."])
     result = await agent_loop.run_agent_loop(
         _recipe(),
@@ -629,7 +639,8 @@ async def test_no_tool_direct_answer_is_refused() -> None:
         question="q",
     )
     final = _last_state_entry(result)
-    assert final["refused"] is True
+    assert final["citations"] == []
+    assert final["refused"] is False
 
 
 # --- Observation cap / pre-fence audit / chunk filtering ----------------------
