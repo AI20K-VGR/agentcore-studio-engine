@@ -94,7 +94,17 @@ def _llm_step_node(retrieved_chunks: list[KbSearchResultItem] | None = None) -> 
     return Node(
         id="n_llm",
         type=NodeType.LLM_STEP,
-        params={"prompt": "x", "kwargs": {}, "retrieved_chunks": list(retrieved_chunks) if retrieved_chunks else []},
+        params={
+            "prompt": "x",
+            "kwargs": {},
+            "retrieved_chunks": list(retrieved_chunks) if retrieved_chunks else [],
+            # engine#37: this file's fixtures all simulate a walk where
+            # `kb-retrieve` ran — `d18-stability-03` deliberately grounds
+            # nothing and expects `refused=True` for it (a real fence case),
+            # which needs `has_kb_upstream=True` set explicitly since this
+            # helper builds a bare `Node`, bypassing `interpreter.py`'s walk.
+            "has_kb_upstream": True,
+        },
     )
 
 

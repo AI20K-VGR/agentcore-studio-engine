@@ -301,6 +301,20 @@ class LlmStepExecutor:
         STRUCTURAL — no NLP guessing at prose, which
         `studio_evalhub.agent_runner.AgentAnswer.refused` forbids.
 
+        `not citations` alone is only correct when a `kb-retrieve` actually ran
+        upstream in this walk — `retrieved_chunks=[]` means the SAME thing
+        whether `kb-retrieve` returned nothing or never ran at all, and this
+        executor cannot tell those apart from `retrieved_chunks` by itself
+        (engine#37). `agentcore-studio-web#14` shipped a first-class standalone
+        mode — a single `llm-step` node with no `kb-retrieve` upstream ("Chatbot
+        LLM Trực Tiếp") — so `citations` is always `[]` there and `not
+        citations` alone would score every real answer a refusal. `has_kb_upstream`
+        (interpreter-threaded, see the matching comment in `interpreter.py`
+        next to `last_kb_output`) gates that: `refused = has_kb_upstream and
+        not citations`. A walk with no `kb-retrieve` never enters the
+        fence-refusal branch this flag exists to measure (SC-04/SC-05 below),
+        so `False` there is the correct answer, not a fallback.
+
         Two earlier signals were tried and are measurably wrong on the real
         golden set (see `tests/test_refusal_from_grounding.py`):
 
@@ -325,9 +339,14 @@ class LlmStepExecutor:
         raw_chunks = node.params.get("retrieved_chunks", [])
         raw_instructions = node.params.get("instructions", "")
         raw_model = node.params.get("model", "")
+        raw_has_kb_upstream = node.params.get("has_kb_upstream", False)
 
         kwargs: dict[str, object] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
         retrieved_chunks: list[KbSearchResultItem] = raw_chunks if isinstance(raw_chunks, list) else []
+        # engine#37: walk-threaded (see `interpreter.py`'s `has_kb_upstream`) —
+        # never trust a non-bool here, same defensive coercion as every other
+        # `raw_*` param in this method.
+        has_kb_upstream = raw_has_kb_upstream if isinstance(raw_has_kb_upstream, bool) else bool(raw_has_kb_upstream)
         # A recipe-declared prompt is a deliberate author choice and wins; the
         # VCR fixtures record one. Otherwise AIE-1 builds it — the published
         # recipe declares none.
@@ -361,7 +380,7 @@ class LlmStepExecutor:
             "answer": answer,
             "tokens": Tokens(prompt=len(prompt.split()), completion=len(answer.split())),
             "citations": citations,
-            "refused": not citations,
+            "refused": has_kb_upstream and not citations,
             "llm_source": llm_source,
         }
 

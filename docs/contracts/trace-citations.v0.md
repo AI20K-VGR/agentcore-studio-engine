@@ -69,7 +69,7 @@ Hỏng **im lặng**, không exception, không log:
 | Ai | Hỏng ra sao |
 |---|---|
 | `citation_accuracy` (evalhub) | Marker không có căn cứ được tính là trích dẫn thật ⇒ **điểm giả cao hơn thực tế**. Trên một bài kiểm hàng rào, xanh-giả nguy hiểm hơn đỏ-giả. |
-| `refused = not citations` (`executors.py:260`) | Đọc ngược: một câu từ chối kèm output của tool có key `citations` thành `refused=False`. |
+| `refused = has_kb_upstream and not citations` (`executors.py`, engine#37) | Đọc ngược: một câu từ chối kèm output của tool có key `citations` thành `refused=False`. |
 | Reader trace (DE) | `trace-event.v0.md` §4.2a bảo reader so theo `node_type`; C-1 là thứ làm cho phép so đó có nghĩa. |
 
 ## 4. Quan hệ với `contracts#2` (SWE)

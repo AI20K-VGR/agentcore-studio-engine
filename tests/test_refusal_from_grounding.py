@@ -79,7 +79,16 @@ class _NoOpTraceWriter:
 
 
 async def _llm_output(answer: str, chunks: list[KbSearchResultItem]) -> dict[str, object]:
-    node = Node(id="n2", type=NodeType.LLM_STEP, params={"query": "q", "retrieved_chunks": chunks})
+    """Simulates a walk where `kb-retrieve` DID run upstream (`has_kb_upstream:
+    True` — engine#37): every case in this module is SC-01..SC-05's shape,
+    which all assume a real retrieval step happened. The "no kb-retrieve at
+    all" shape gets its own test below, through the real walk instead of this
+    direct-executor helper."""
+    node = Node(
+        id="n2",
+        type=NodeType.LLM_STEP,
+        params={"query": "q", "retrieved_chunks": chunks, "has_kb_upstream": True},
+    )
     result = await LlmStepExecutor(_ReplayLLM(answer), EmptyEmbedding()).execute(node)
     assert isinstance(result, dict)
     return result
@@ -115,6 +124,50 @@ async def test_refused_true_when_nothing_was_retrieved() -> None:
 
     assert out["citations"] == []
     assert out["refused"] is True
+
+
+async def test_refused_false_when_no_kb_retrieve_upstream_at_all() -> None:
+    """engine#37 repro: a walk with NO `kb-retrieve` node at all
+    (`agentcore-studio-web#14`'s standalone "Chatbot LLM Trực Tiếp" mode,
+    `llm-step -> end`) reaches `LlmStepExecutor` with `retrieved_chunks == []`
+    for the SAME reason `test_refused_true_when_nothing_was_retrieved` above
+    does — but the two must NOT read the same: that test's `kb-retrieve` DID
+    run and legitimately found nothing (a fence case); this walk never had a
+    `kb-retrieve` to run in the first place, so there is no fence-refusal
+    branch to fail. Real answer, empty citations (nothing was ever offered to
+    cite), and `refused` must be False — through the real walk
+    (`interpreter.run()`), not the direct-executor helper, so `has_kb_upstream`
+    is genuinely walk-derived rather than hand-set."""
+    nodes = [
+        Node(id="n1", type=NodeType.LLM_STEP, params={"prompt": "Xin chào, hôm nay thời tiết thế nào?"}),
+        Node(id="n2", type=NodeType.END, params={}),
+    ]
+    recipe = Recipe(
+        agent_id="agent-standalone-chat",
+        tenant_id=ANKOR_ID,
+        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2")]),
+        # Required by the `Recipe` schema even though this DAG has no
+        # `kb-retrieve` node to use it — never dereferenced on this walk.
+        kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
+        golden_set_ref="engine37-standalone-llm-step",
+        scorecard_threshold=ScorecardThreshold(success=0.9, citation_accuracy=0.95),
+    )
+
+    result = await interpreter.run(
+        recipe,
+        session_context=default_session_context(),
+        kb_search=_MeasuredKbSearch([]),
+        llm=_ReplayLLM("Hôm nay Hà Nội nắng, khoảng 30 độ."),
+        embedding=EmptyEmbedding(),
+        trace_writer=_NoOpTraceWriter(),
+    )
+
+    llm_output = result.final_state["n1"]
+    assert isinstance(llm_output, dict)
+    assert llm_output["answer"] == "Hôm nay Hà Nội nắng, khoảng 30 độ."
+    assert llm_output["citations"] == []
+    assert llm_output["refused"] is False
 
 
 async def test_refused_true_when_the_only_bracket_is_ungrounded() -> None:
