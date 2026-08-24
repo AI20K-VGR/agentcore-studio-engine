@@ -54,6 +54,7 @@ from studio_contracts import (
     TraceEvent,
     TraceWriter,
 )
+from studio_contracts.cost import cost_of
 
 from studio_engine.demo_stubs import WhitelistToolDispatch
 from studio_engine.executors import (
@@ -69,11 +70,6 @@ from studio_engine.executors import (
 )
 from studio_engine.fence import fenced_kb_params
 from studio_engine.session import SessionContext
-
-# Day 5 (out of scope for cost-lineage — obs.costs stays a schema-shell until
-# DE builds real cost aggregation): every TraceEvent this phase emits carries
-# this fixed cost, never a computed one.
-_NO_COST = 0.0
 
 # Day 14 (F8): sentinel distinct from `None`/`{}`/any real executor output —
 # tells "no node has run yet this walk" (a `condition` is the DAG's start
@@ -439,7 +435,7 @@ async def run(
             inputs_hash=hashlib.sha256(json.dumps(node.params, sort_keys=True, default=str).encode()).hexdigest(),
             outputs=outputs,
             tokens=tokens,
-            cost=_NO_COST,
+            cost=cost_of(tokens),
             citations=citations,
         )
         await trace_writer.write(event)
