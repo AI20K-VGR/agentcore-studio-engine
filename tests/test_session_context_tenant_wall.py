@@ -111,7 +111,7 @@ def _kb_then_end_recipe(*, recipe_tenant_id: UUID, node_tenant_id: UUID | None =
     return Recipe(
         agent_id="agent-1",
         tenant_id=recipe_tenant_id,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n_kb", to="n_end")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",

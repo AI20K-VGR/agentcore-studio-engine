@@ -74,7 +74,7 @@ def build_demo_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-demo",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(
             nodes=nodes,
             edges=[

@@ -84,7 +84,7 @@ def _recipe(nodes: list[Node], edges: list[Edge]) -> Recipe:
     return Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",

@@ -204,18 +204,18 @@ _CONVENTION_BLOCK = (
 
 def build_agent_prompt(
     *,
-    instructions: str,
+    system_prompt: str,
     question: str,
     tool_names: Sequence[str],
     observations: Sequence[Observation],
 ) -> str:
-    """Assemble the full prompt for one loop turn: `instructions` (if any) ->
+    """Assemble the full prompt for one loop turn: `system_prompt` (if any) ->
     tool-call convention block + catalog -> observation transcript, in order ->
     the question. `observations` render in the exact order given — the caller
     (`agent_loop.py`) is responsible for turn ordering."""
     blocks: list[str] = []
-    if instructions:
-        blocks.append(instructions)
+    if system_prompt:
+        blocks.append(system_prompt)
     blocks.append(_CONVENTION_BLOCK)
     blocks.append("Tool khả dụng:\n" + render_tool_catalog(tool_names))
     for obs in observations:

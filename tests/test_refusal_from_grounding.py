@@ -145,7 +145,7 @@ async def test_refused_false_when_no_kb_retrieve_upstream_at_all() -> None:
     recipe = Recipe(
         agent_id="agent-standalone-chat",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2")]),
         # Required by the `Recipe` schema even though this DAG has no
         # `kb-retrieve` node to use it — never dereferenced on this walk.
@@ -262,7 +262,7 @@ async def test_golden_case_refusal_flag_matches_its_label(
     recipe = Recipe(
         agent_id="agent-golden",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="callisto-smoke-5-v0",

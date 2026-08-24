@@ -199,7 +199,7 @@ def _build_recipe(case: GoldenCase) -> Recipe:
     return Recipe(
         agent_id=f"agent-d16-golden-{case.case_id}",
         tenant_id=tenant_id,
-        agent_config=AgentConfig(instructions="", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope=f"{case.tenant}/{role}"),
         golden_set_ref="callisto-golden-30-v1",

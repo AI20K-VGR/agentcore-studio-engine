@@ -127,7 +127,7 @@ def build_six_node_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-d20-spine-demo",
         tenant_id=_TENANT_ID,
-        agent_config=AgentConfig(instructions="", model="m", tool_whitelist=[_TOOL_NAME]),
+        agent_config=AgentConfig(system_prompt="", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="d20-spine-demo",

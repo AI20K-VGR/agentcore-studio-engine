@@ -79,7 +79,7 @@ def _four_node_recipe(*, extra_nodes: list[Node] | None = None, extra_edges: lis
     return Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",

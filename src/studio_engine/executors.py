@@ -51,7 +51,7 @@ _PROMPT_HEADER = (
 _NO_EXCERPT = "(không có đoạn trích nào được truy xuất)"
 
 
-def build_prompt(query: str, chunks: list[KbSearchResultItem], instructions: str = "") -> str:
+def build_prompt(query: str, chunks: list[KbSearchResultItem], system_prompt: str = "") -> str:
     """Render the `llm-step` prompt from the walk's question and its grounding.
 
     Each chunk opens with its `chunk_id` alone on a line, in bracket form,
@@ -67,12 +67,12 @@ def build_prompt(query: str, chunks: list[KbSearchResultItem], instructions: str
     retrieval is a valid result, not an error (`kb-search.v0.md` §6.1), and the
     model still has to be told there was nothing to read.
 
-    `instructions` (Day 7, `recipe.agent_config.instructions`) is optional and
+    `system_prompt` (Day 7, `recipe.agent_config.system_prompt`) is optional and
     defaults to `""` so every pre-Day-7 2-arg call site keeps its exact prior
     output; when given, it is prepended ahead of the fixed `_PROMPT_HEADER`.
     """
     excerpts = "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in chunks) if chunks else _NO_EXCERPT
-    header = f"{instructions}\n\n{_PROMPT_HEADER}" if instructions else _PROMPT_HEADER
+    header = f"{system_prompt}\n\n{_PROMPT_HEADER}" if system_prompt else _PROMPT_HEADER
     return f"{header}\n\n{excerpts}\n\nCâu hỏi: {query}"
 
 
@@ -337,7 +337,7 @@ class LlmStepExecutor:
         raw_query = node.params.get("query", "")
         raw_kwargs = node.params.get("kwargs", {})
         raw_chunks = node.params.get("retrieved_chunks", [])
-        raw_instructions = node.params.get("instructions", "")
+        raw_system_prompt = node.params.get("system_prompt", "")
         raw_model = node.params.get("model", "")
         raw_has_kb_upstream = node.params.get("has_kb_upstream", False)
 
@@ -352,9 +352,9 @@ class LlmStepExecutor:
         # recipe declares none.
         declared_prompt = raw_prompt if isinstance(raw_prompt, str) else str(raw_prompt)
         query = raw_query if isinstance(raw_query, str) else str(raw_query)
-        instructions = raw_instructions if isinstance(raw_instructions, str) else str(raw_instructions)
+        system_prompt = raw_system_prompt if isinstance(raw_system_prompt, str) else str(raw_system_prompt)
         model = raw_model if isinstance(raw_model, str) else str(raw_model)
-        prompt = declared_prompt or build_prompt(query, retrieved_chunks, instructions)
+        prompt = declared_prompt or build_prompt(query, retrieved_chunks, system_prompt)
         # `model` (Day 7, `recipe.agent_config.model`) is forwarded into
         # `kwargs["model"]` only when the recipe hasn't already declared its
         # own `kwargs["model"]` — a recipe-declared kwarg is a deliberate

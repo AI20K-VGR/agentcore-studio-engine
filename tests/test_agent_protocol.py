@@ -178,9 +178,9 @@ def test_render_tool_catalog_lists_known_tool_param_hints() -> None:
     assert "mystery_tool" in rendered  # unknown tool: name only, no invented params
 
 
-def test_prompt_contains_question_instructions_tools_and_convention() -> None:
+def test_prompt_contains_question_system_prompt_tools_and_convention() -> None:
     prompt = build_agent_prompt(
-        instructions="Chỉ dùng KB.",
+        system_prompt="Chỉ dùng KB.",
         question="Câu hỏi test?",
         tool_names=["kb_search", "calculator"],
         observations=[],
@@ -198,7 +198,7 @@ def test_observations_rendered_in_order() -> None:
     obs1 = Observation(tool="kb_search", params={}, result_text="OBS_MARKER_ONE")
     obs2 = Observation(tool="calculator", params={}, result_text="OBS_MARKER_TWO")
     prompt = build_agent_prompt(
-        instructions="",
+        system_prompt="",
         question="q",
         tool_names=["kb_search"],
         observations=[obs1, obs2],
