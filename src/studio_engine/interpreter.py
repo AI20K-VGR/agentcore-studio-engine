@@ -227,7 +227,10 @@ async def run(
     longer implies execution order, so a `{node.type: node}` dict
     (last-declared-wins) can supply a sibling branch's chunks or a node that
     has not executed yet. A walk with no upstream `kb-retrieve` threads `[]`,
-    which `LlmStepExecutor` documents as a valid input.
+    which `LlmStepExecutor` documents as a valid input — but `[]` alone does
+    NOT tell it whether `kb-retrieve` ran and found nothing versus never ran
+    at all, so `has_kb_upstream` (engine#37) is threaded alongside it and
+    gates `refused` accordingly.
 
     Day 5: a real `TraceEvent` is built and `await trace_writer.write(event)`
     called for EVERY dispatched node (no node is skipped) — `events` on the
@@ -288,6 +291,18 @@ async def run(
     # declaration order no longer implies execution order, so a by-type lookup
     # could supply a sibling branch's query.
     last_kb_query: object = ""
+    # engine#37: whether the walk has passed through a `kb-retrieve` node
+    # BEFORE this `llm-step` — distinct from `last_kb_output == []` above,
+    # which is ALSO the value when `kb-retrieve` DID run and returned zero
+    # chunks (fenced). Without this, a walk with no `kb-retrieve` at all
+    # (`llm-step -> end`, the standalone-chatbot mode `agentcore-studio-web#14`
+    # shipped) reads identically to "kb-retrieve ran and found nothing", and
+    # `LlmStepExecutor` cannot tell the two apart from `retrieved_chunks`
+    # alone — every real chatbot answer was scored `refused=True`. Same F8
+    # rationale as `_NO_UPSTREAM` below, applied to grounding instead of
+    # routing: a bare falsy default cannot distinguish "never ran" from "ran,
+    # returned nothing".
+    has_kb_upstream = False
     # `condition`'s `state` param (see the injection branch below) is the
     # WALK's last output, whatever node type produced it — not filtered to
     # `kb-retrieve` the way `last_kb_output` above is. `_NO_UPSTREAM` (F8)
@@ -316,6 +331,11 @@ async def run(
                         **node.params,
                         "retrieved_chunks": last_kb_output,
                         "query": last_kb_query,
+                        # engine#37: walk-derived, placed after the `**node.params`
+                        # spread so it always wins over any client-declared value —
+                        # this gates `refused` (a refusal/security-relevant signal),
+                        # so a recipe must never be able to spoof "kb-retrieve ran".
+                        "has_kb_upstream": has_kb_upstream,
                         # Day 7: `agent_config.instructions`/`.model` threaded the
                         # same way as `retrieved_chunks`/`query` above —
                         # `LlmStepExecutor` reads both from `node.params`, so
@@ -361,6 +381,7 @@ async def run(
         if node_type is NodeType.KB_RETRIEVE:
             last_kb_output = output
             last_kb_query = node.params.get("query", "")
+            has_kb_upstream = True
 
         if isinstance(output, list):
             chunks = [item.model_dump(mode="json") for item in output if isinstance(item, KbSearchResultItem)]
