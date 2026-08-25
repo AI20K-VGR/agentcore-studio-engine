@@ -2,8 +2,9 @@
 `studio_engine.agent_protocol`: the pure TEXT protocol between `run_agent_loop()`
 (phase 3) and the `LLM` seam. Parse (`parse_agent_signal`) + render
 (`render_tool_catalog`/`render_kb_observation`/`build_agent_prompt`) + ground
-(`ground_citations`). No I/O, no LLM/KB double needed — every test here is a pure
-function call.
+(`ground_citations`) + faithfulness-verify prompt/parse
+(`build_faithfulness_prompt`/`parse_faithfulness_verdict`, engine#43). No I/O,
+no LLM/KB double needed — every test here is a pure function call.
 
 Decision A1 (`plan.md` — VALIDATED, DEC-2): `TOOL_CALL:` is the ONE signal;
 everything else is a final answer. See `agent_protocol.py`'s own module docstring
@@ -21,8 +22,10 @@ from studio_engine.agent_protocol import (
     FinalAnswer,
     ToolCall,
     build_agent_prompt,
+    build_faithfulness_prompt,
     ground_citations,
     parse_agent_signal,
+    parse_faithfulness_verdict,
     render_kb_observation,
     render_tool_catalog,
 )
@@ -233,3 +236,106 @@ def test_ground_citations_preserves_answer_order() -> None:
     chunks = [_chunk("a"), _chunk("b")]
     result = ground_citations("Trả lời [b] rồi [a].", chunks)
     assert result == ["b", "a"]
+
+
+# --- engine#43 (HB2-25): faithfulness-verify prompt/parse -------------------
+# `ground_citations` above proves PROVENANCE only (cited id was retrieved) — it
+# cannot prove SUBJECT match (the cited chunk actually answers what was asked).
+# These two functions stay pure (this module's own "no I/O, no async" contract,
+# DEC-2/A1) — the async `llm.complete()` orchestration around them lives in
+# `agent_loop.py`.
+
+
+def test_build_faithfulness_prompt_includes_chunk_id_and_text() -> None:
+    # chunk_id deliberately included alongside text, not text alone: a prior
+    # measurement found only 253/800 (31.6%) of the real corpus's chunks name
+    # their subject inside chunk TEXT itself — chunk_id's tenant-subject-slug
+    # prefix (e.g. "ankor-engineering-incident#c6") is the signal the other
+    # 68.4% of the time text alone cannot provide.
+    chunk = _chunk("ankor-engineering-incident#c6", text="P1 MTTR target: dưới 1 giờ.")
+    prompt = build_faithfulness_prompt("Sự cố P1 của Borea?", [chunk])
+    assert "ankor-engineering-incident#c6" in prompt
+    assert "P1 MTTR target: dưới 1 giờ." in prompt
+
+
+def test_build_faithfulness_prompt_includes_question() -> None:
+    prompt = build_faithfulness_prompt("Sự cố P1 của Borea?", [_chunk("a")])
+    assert "Sự cố P1 của Borea?" in prompt
+
+
+def test_parse_faithfulness_verdict_co_is_co() -> None:
+    assert parse_faithfulness_verdict("CO") == "CO"
+
+
+def test_parse_faithfulness_verdict_khong_is_khong() -> None:
+    assert parse_faithfulness_verdict("KHONG") == "KHONG"
+
+
+def test_parse_faithfulness_verdict_diacritic_co_is_co() -> None:
+    # Regression: `.strip().upper().startswith("CO")` (the naive form) does NOT
+    # match "CÓ" — `str.upper()` does not strip Vietnamese combining marks.
+    assert parse_faithfulness_verdict("CÓ") == "CO"
+
+
+def test_parse_faithfulness_verdict_diacritic_khong_is_khong() -> None:
+    assert parse_faithfulness_verdict("KHÔNG") == "KHONG"
+
+
+def test_parse_faithfulness_verdict_khong_buried_in_sentence_is_khong() -> None:
+    # PR review (engine#43/#46) regression: `.startswith("KHONG")` reads this
+    # as CO because "KHÔNG" isn't the first word — but this sentence IS
+    # HB2-25's own reasoning shape (the model correctly notices the chunk is
+    # Ankor's while the question asks about Borea). Word-boundary detection
+    # must catch a clear KHONG signal wherever it appears, not just position 0.
+    verdict = parse_faithfulness_verdict("Đoạn trích thuộc tài liệu Ankor nên KHÔNG")
+    assert verdict == "KHONG"
+
+
+def test_parse_faithfulness_verdict_khong_prefixed_by_label_is_khong() -> None:
+    assert parse_faithfulness_verdict("Câu trả lời: KHÔNG") == "KHONG"
+
+
+def test_parse_faithfulness_verdict_no_co_or_khong_word_is_unparseable() -> None:
+    # 3-state, not a bool (PR review point 2): callers must be able to tell
+    # "model said CO" apart from "could not tell", instead of both silently
+    # collapsing into one value the way the first cut did.
+    assert parse_faithfulness_verdict("xin chào") == "UNPARSEABLE"
+    assert parse_faithfulness_verdict("") == "UNPARSEABLE"
+
+
+# --- PR #46 review round 2 regression: KHONG-before-CO priority order -------
+# The word-boundary fix above (round 1) reads a clear KHONG/CO signal ANYWHERE
+# in the sentence, not just position 0 — correct for HB2-25's own reasoning
+# shape. But an earlier version of the function then broke the *other* way:
+# it checked KHONG before CO, so any sentence where the model correctly
+# answers CO but explains itself using "không" (an ordinary Vietnamese
+# negation particle, unrelated to the verdict) got silently misread as
+# KHONG and over-refused — the exact failure class this feature exists to
+# avoid (evalhub#51, see the function's own docstring). Fixed: BOTH tokens
+# present is genuinely ambiguous and must fail open to UNPARSEABLE, not pick
+# a winner by priority or by which token appears first (the reviewer's own
+# alternative — verified separately to only rescue 2 of these 3 sentences).
+
+
+def test_parse_faithfulness_verdict_co_first_khong_word_is_unparseable() -> None:
+    # Model answers CO, then explains using "không" for something else
+    # entirely ("does not at all talk about a different subject") — NOT a
+    # verdict of KHONG. The KHONG-before-CO priority order misread this as
+    # KHONG; must be UNPARSEABLE (ambiguous), which still keeps the citation
+    # at the call site, same as CO would.
+    verdict = parse_faithfulness_verdict("CÓ, đoạn trích này không hề nói về chủ thể khác")
+    assert verdict == "UNPARSEABLE"
+
+
+def test_parse_faithfulness_verdict_khong_word_then_co_is_unparseable() -> None:
+    verdict = parse_faithfulness_verdict("Có — không có gì sai ở đây")
+    assert verdict == "UNPARSEABLE"
+
+
+def test_parse_faithfulness_verdict_khong_word_before_co_verdict_is_unparseable() -> None:
+    # KHONG token appears before the CO token here, so "take whichever
+    # token appears first" (the alternative fix considered and rejected)
+    # would ALSO misread this one as KHONG — only the both-present ->
+    # UNPARSEABLE rule handles all 3 regression sentences correctly.
+    verdict = parse_faithfulness_verdict("Đoạn trích KHÔNG sai chủ thể, nên CÓ")
+    assert verdict == "UNPARSEABLE"

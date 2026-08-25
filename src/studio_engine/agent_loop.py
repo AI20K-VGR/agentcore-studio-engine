@@ -83,6 +83,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from studio_contracts import (
@@ -101,12 +102,15 @@ from studio_contracts.cost import cost_of
 
 from studio_engine.agent_protocol import (
     KB_SEARCH_TOOL,
+    FaithfulnessVerdict,
     FinalAnswer,
     Observation,
     ToolCall,
     build_agent_prompt,
+    build_faithfulness_prompt,
     ground_citations,
     parse_agent_signal,
+    parse_faithfulness_verdict,
     render_kb_observation,
 )
 from studio_engine.demo_stubs import WhitelistToolDispatch
@@ -214,6 +218,79 @@ def _jsonsafe(value: object) -> object:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class FaithfulnessCheck:
+    """Result of `_verify_citation_faithfulness` (engine#43 PR review points
+    2/3/5). A bare `bool` (the first cut) collapsed three DISTINGUISHABLE
+    outcomes into one value — "model said CO", "model said KHONG", "the call
+    never ran (no citations)" — and dropped the tokens/prompt the caller
+    needs to trace and cost this call like any other `llm.complete()` turn.
+    `ran=False` iff `verdict`/`tokens`/`prompt`/`raw` are all `None` together
+    — the empty-citations short-circuit, no call was made, nothing to trace
+    or cost."""
+
+    keep_citations: bool
+    ran: bool
+    verdict: FaithfulnessVerdict | None
+    tokens: Tokens | None
+    prompt: str | None
+    raw: str | None
+
+
+async def _verify_citation_faithfulness(
+    llm: LLM, *, question: str, citations: list[str], retrieved: list[KbSearchResultItem], **kwargs: object
+) -> FaithfulnessCheck:
+    """engine#43 (HB2-25) — second grounding pass, orthogonal to
+    `ground_citations`: PROVENANCE (chunk_id was retrieved) says nothing
+    about SUBJECT match (the cited chunk actually answers what was asked).
+    Money-shot: scope `ankor/engineering`, question about "Borea", model
+    answers from `ankor-engineering-incident#c6` — a REAL, RETRIEVED,
+    validly-provenanced chunk (`ground_citations` returns it unchanged,
+    citation_accuracy scores 1.0) whose subject is still wrong.
+
+    1 extra `llm.complete()` call per final-answer turn that has >=1
+    citation — skipped entirely (no call, no cost) when `citations` is
+    empty, which is the common no-citation-refusal shape (SC-04/SC-05) this
+    loop already emits constantly. NOT free on every turn — surfaced here
+    plainly rather than hidden behind a flag: no feature flag exists for
+    this yet, that tradeoff is left for PR review to weigh.
+
+    Each cited chunk's text is bounded by `_truncate_observation` (PR review
+    point 4) before it goes into the prompt — same policy `kb-retrieve`
+    observations already get (`_MAX_OBSERVATION_CHARS`, line ~142), applied
+    PER CHUNK here rather than to the joined blob: the verify prompt embeds
+    excerpts INSIDE a larger template with a trailing instruction ("Trả lời
+    CHỈ MỘT TỪ..."), so truncating the whole rendered prompt as one block
+    (the `kb-retrieve` pattern) risks cutting off that trailing instruction
+    instead of just the evidence — per-chunk truncation bounds each excerpt
+    without ever touching the template around it. `model_copy(update=...)`
+    (frozen pydantic model, no in-place mutation) — cheap, and the
+    caller-facing `retrieved` list of the ORIGINAL untruncated chunks stays
+    untouched for every other use.
+
+    Prompt-build/verdict-parse are PURE and live in `agent_protocol.py`
+    (that module's own hard "no I/O, no async" contract, DEC-2/A1); this
+    function is the async orchestration around them and belongs here, next
+    to every other `llm.complete()` call this loop already makes. `**kwargs`
+    is the SAME `{"model": ...}` dict the main-turn call already built —
+    the verify call honors the same recipe-declared model."""
+    if not citations:
+        return FaithfulnessCheck(keep_citations=True, ran=False, verdict=None, tokens=None, prompt=None, raw=None)
+    wanted = set(citations)
+    cited = [
+        chunk.model_copy(update={"text": _truncate_observation(chunk.text)})
+        for chunk in retrieved
+        if chunk.chunk_id in wanted
+    ]
+    prompt = build_faithfulness_prompt(question, cited)
+    raw = await llm.complete(prompt, **kwargs)
+    verdict = parse_faithfulness_verdict(raw)
+    tokens = Tokens(prompt=len(prompt.split()), completion=len(raw.split()))
+    return FaithfulnessCheck(
+        keep_citations=verdict != "KHONG", ran=True, verdict=verdict, tokens=tokens, prompt=prompt, raw=raw
+    )
+
+
 async def run_agent_loop(
     recipe: Recipe,
     *,
@@ -277,6 +354,59 @@ async def run_agent_loop(
 
         if isinstance(signal, FinalAnswer):
             citations = ground_citations(signal.text, retrieved)
+            # engine#43 (HB2-25): `ground_citations` only proves PROVENANCE
+            # (the id was retrieved) — it does not prove the cited chunk
+            # actually answers the question's SUBJECT. This 2nd LLM call
+            # catches the "valid chunk_id, wrong subject" hallucination
+            # `ground_citations` structurally cannot see.
+            check = await _verify_citation_faithfulness(
+                llm, question=question, citations=citations, retrieved=retrieved, **kwargs
+            )
+            if check.ran:
+                # PR review point 3/5: this call gets its OWN traced+costed
+                # TraceEvent, same as every other `llm.complete()` turn this
+                # loop makes — the first cut called `llm.complete()` here
+                # without a `Tokens`/`cost_of`/`TraceEvent` for it, which
+                # under-reported real cost on EVERY citation-bearing turn
+                # (not a rare path) and broke the "cost is one number, three
+                # surfaces agree" invariant (DEC-D28): trace, run report, and
+                # scorecard all read from traced tokens, so an untraced call
+                # is invisible to all three the same way, and none of them
+                # can catch the other being wrong.
+                assert check.tokens is not None and check.prompt is not None
+                last_ts = _bump_ts(last_ts)
+                verify_event_id = f"t{i}-llm-faithfulness"
+                verify_out: dict[str, object] = {
+                    "raw": check.raw,
+                    "verdict": check.verdict,
+                    "citations_checked": citations,
+                    "signal": "faithfulness-verify",
+                }
+                verify_event = TraceEvent(
+                    event_id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    agent_id=recipe.agent_id,
+                    tenant_id=session_context.tenant_id,
+                    node_id=verify_event_id,
+                    node_type=NodeType.LLM_STEP,
+                    ts=last_ts.isoformat(timespec="microseconds"),
+                    inputs_hash=_hash_prompt(check.prompt),
+                    outputs=verify_out,
+                    tokens=check.tokens,
+                    cost=cost_of(check.tokens),
+                    citations=None,
+                )
+                await trace_writer.write(verify_event)
+                events.append(verify_event)
+                state[verify_event_id] = verify_out
+            if not check.keep_citations:
+                # A faithfulness failure now reads exactly like "no citation
+                # was grounded" downstream (A5's `refused` formula below) —
+                # but UNLIKE before, `verify_event` above (when `check.ran`)
+                # is the audit trail (PR review point 5) that says WHY: a
+                # citation was stripped by the faithfulness check, not that
+                # one was never grounded in the first place (SC-04/SC-05).
+                citations = []
             # A5 (DEC-4): NOT `not citations` (that is `LlmStepExecutor`'s
             # DAG-walk formula, `executors.py:364`, which assumes the ONLY
             # path is `kb-retrieve -> llm-step` — false here, where a fully
@@ -291,11 +421,13 @@ async def run_agent_loop(
             # reason it is true after a fenced-empty `kb_search`, and this
             # loop cannot tell those two apart without the flag.
             refused = used_kb_search and (not citations) and (not used_non_kb_tool)
+            last_ts = _bump_ts(last_ts)
             out: dict[str, object] = {
                 "answer": signal.text,
                 "citations": citations,
                 "refused": refused,
                 "signal": "final-answer-malformed" if signal.malformed_tool_call else "final-answer",
+                "faithfulness_verdict": check.verdict,
             }
             event = TraceEvent(
                 event_id=str(uuid.uuid4()),

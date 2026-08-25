@@ -56,8 +56,10 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from studio_contracts import KbSearchResultItem
 
@@ -233,3 +235,131 @@ def ground_citations(answer: str, chunks: Sequence[KbSearchResultItem]) -> list[
     (`_CITATION_RE.findall`), matching `executors.py:358`."""
     retrieved_ids = {chunk.chunk_id for chunk in chunks}
     return [cid for cid in _CITATION_RE.findall(answer) if cid in retrieved_ids]
+
+
+# --- engine#43 (HB2-25): faithfulness-verify prompt/parse -------------------
+# `ground_citations` above proves PROVENANCE only (cited id was retrieved) — it
+# cannot prove SUBJECT match (the cited chunk actually answers what was asked).
+# The async `llm.complete()` orchestration around these two pure functions
+# lives in `agent_loop.py` — this module stays I/O-free per its own docstring
+# above, DEC-2/A1.
+
+# No diacritics required of the model; `parse_faithfulness_verdict` below
+# normalizes any diacritic form back onto these.
+_FAITHFULNESS_YES = "CO"
+_FAITHFULNESS_NO = "KHONG"
+
+_FAITHFULNESS_PROMPT_TEMPLATE = (
+    "Bạn là bộ kiểm tra căn cứ (grounding check), không phải người trả lời câu hỏi.\n\n"
+    "Câu hỏi gốc: {question}\n\n"
+    "Câu trả lời đã trích dẫn các đoạn sau đây làm căn cứ:\n\n"
+    "{cited_excerpts}\n\n"
+    "Hỏi: TẤT CẢ các đoạn trích trên có thực sự nói về ĐÚNG chủ thể/thực thể mà câu hỏi hỏi đến "
+    "hay không — không chỉ đúng chủ đề chung chung, mà đúng tên riêng/thực thể cụ thể được hỏi? "
+    'Nếu bất kỳ đoạn nào nói về một chủ thể KHÁC câu hỏi (ví dụ câu hỏi hỏi về "Borea" nhưng đoạn '
+    'trích thuộc tài liệu của "Ankor"), câu trả lời là {no}.\n\n'
+    "Trả lời CHỈ MỘT TỪ DUY NHẤT: {yes} hoặc {no}. Không giải thích gì thêm."
+)
+
+
+def build_faithfulness_prompt(question: str, cited_chunks: Sequence[KbSearchResultItem]) -> str:
+    """Pure prompt-builder for engine#43 (HB2-25)'s faithfulness-verify call —
+    the async orchestration (the actual `llm.complete()` call) lives in
+    `agent_loop.py`, per this module's own "no I/O, no async" contract
+    (module docstring, DEC-2/A1). Same `[chunk_id]\\n<text>` excerpt shape as
+    `render_kb_observation` above. `chunk_id` is included alongside `text`
+    DELIBERATELY, not text alone: a prior measurement
+    (`packages/evalhub/docs/evidence/260825-engine43-candidates/`, not yet
+    pushed) found only 253/800 (31.6%) of the real corpus's chunks name their
+    subject inside the chunk TEXT itself; `chunk_id`'s
+    `{tenant-subject-slug}#c{n}` shape (e.g. `ankor-engineering-incident#c6`)
+    names the subject the other 68.4% of the time text alone cannot — a
+    verify call fed text alone was measured answering blind on most of the
+    corpus."""
+    excerpts = "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in cited_chunks)
+    return _FAITHFULNESS_PROMPT_TEMPLATE.format(
+        question=question, cited_excerpts=excerpts, yes=_FAITHFULNESS_YES, no=_FAITHFULNESS_NO
+    )
+
+
+FaithfulnessVerdict = Literal["CO", "KHONG", "UNPARSEABLE"]
+
+_FAITHFULNESS_WORD_RE = re.compile(r"[A-Z]+")
+
+
+def parse_faithfulness_verdict(raw: str) -> FaithfulnessVerdict:
+    """Diacritic-safe, word-boundary CO/KHONG classify for the
+    faithfulness-verify call above. Returns a 3-STATE result, not a bool
+    (PR review point 2, `engine#43`/#46): a bare bool cannot distinguish
+    "the model clearly said CO" from "the answer could not be read at all" —
+    both silently became `True` in the first cut, so a bad measurement could
+    never tell "the verify step ran and judged wrong" apart from "the verify
+    step never produced a readable verdict". The caller (`agent_loop.py`)
+    traces `verdict` into its own `TraceEvent`, so this distinction is
+    actually observable in a run, not just theoretically available.
+
+    Word-boundary detection, NOT `.startswith(...)` (review point 1): the
+    naive `raw.strip().upper().startswith("KHONG")` only reads position 0,
+    so a non-compliant-but-CORRECT answer like "Đoạn trích thuộc tài liệu
+    Ankor nên KHÔNG" — HB2-25's own reasoning shape, the model correctly
+    noticing the chunk is Ankor's while the question asks about Borea — was
+    silently misread as CO. NFD-normalize + drop combining marks so
+    "CÓ"/"Có"/"có" and "KHÔNG"/"Không" all collapse onto plain "CO"/"KHONG",
+    then split into `[A-Z]+` word tokens and check membership: this catches
+    a clear signal ANYWHERE in a longer non-compliant sentence, without the
+    false-positive risk a plain substring `in` check would have (e.g. "CO"
+    inside "CODE" — `findall` only ever yields maximal letter runs, so a
+    partial match inside a longer word can never register).
+
+    BOTH tokens present -> UNPARSEABLE, not a priority pick (PR #46 review
+    round 2 regression, found AFTER the word-boundary fix above shipped):
+    an earlier version of this function checked KHONG before CO, on the
+    theory that a clear no-signal must never be shadowed by an incidental
+    "co"-shaped token elsewhere in the sentence. That is backwards for
+    Vietnamese — "không" is an ordinary negation particle that shows up
+    constantly in explanatory prose regardless of the actual verdict, while
+    "có" rarely appears as a stray word. Reproduced and confirmed against
+    the KHONG-before-CO version:
+
+        'CÓ, đoạn trích này không hề nói về chủ thể khác'  -> KHONG (should be CO)
+        'Có — không có gì sai ở đây'                        -> KHONG (should be CO)
+        'Đoạn trích KHÔNG sai chủ thể, nên CÓ'               -> KHONG (should be CO)
+
+    All three are a model correctly answering CO while explaining itself
+    with a sentence that happens to contain "không" for something other
+    than the verdict — the priority rule silently turned a correct CO into
+    an over-refusal, the exact failure class this whole faithfulness-verify
+    feature exists to avoid (evalhub#51, cited below). The reviewer's other
+    proposed alternative — take whichever token appears FIRST in the
+    sentence — was checked too and only rescues 2 of the 3 lines above (the
+    third has KHONG appearing before the intended CO). Neither priority
+    order nor position order is safe, so an input containing both tokens is
+    genuinely ambiguous and must fail open like any other unparseable
+    input, not guess a winner. This still correctly classifies a genuinely
+    hedging answer ("Có thể" / "maybe") as UNPARSEABLE rather than picking
+    a side — appropriate, since the caller's fail-open policy keeps the
+    citation for both CO and UNPARSEABLE anyway, so the two are
+    behaviorally identical for the citation-keep decision; only the trace
+    label differs.
+
+    UNPARSEABLE (neither word present, or both present) still means "keep
+    the citation" at the call site — fails OPEN, same policy as before. A
+    malformed verdict
+    silently downgrading an already-grounded citation to a refusal would be
+    the SAME over-refusal failure mode the sibling `_CONVENTION_BLOCK`-
+    narrowing candidate was already measured and rejected for (`evalhub#51`
+    README:101 — that change alone dropped a 10-run gate from PASS to 0/10
+    PASS by over-refusing). This function must not reintroduce that failure
+    mode through its own parse ambiguity."""
+    nfd = unicodedata.normalize("NFD", raw.strip())
+    stripped = "".join(ch for ch in nfd if not unicodedata.combining(ch)).upper()
+    words = set(_FAITHFULNESS_WORD_RE.findall(stripped))
+    has_no = _FAITHFULNESS_NO in words
+    has_co = _FAITHFULNESS_YES in words
+    if has_no and has_co:
+        return "UNPARSEABLE"
+    if has_no:
+        return "KHONG"
+    if has_co:
+        return "CO"
+    return "UNPARSEABLE"
