@@ -50,14 +50,14 @@ class _FrozenSessionContext:
 
     tenant_id: UUID
     user: str
-    roles: list[str]
+    system_roles: list[str]
 
 
 def default_session_context(tenant_id: UUID = ANKOR_ID) -> SessionContext:
     """Shared builder imported by the other 6 Phase-1 test files (plus
     `test_cli_demo.py`) so `run()`'s new mandatory `session_context` doesn't
     get 7 copy-pasted definitions."""
-    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", roles=[])
+    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", system_roles=[])
 
 
 def _accepts_session_context(ctx: SessionContext) -> UUID:
@@ -120,7 +120,7 @@ def _kb_then_end_recipe(*, recipe_tenant_id: UUID, node_tenant_id: UUID | None =
 
 
 async def test_frozen_dataclass_satisfies_session_context_protocol() -> None:
-    ctx = _FrozenSessionContext(tenant_id=ANKOR_ID, user="u", roles=["viewer"])
+    ctx = _FrozenSessionContext(tenant_id=ANKOR_ID, user="u", system_roles=["viewer"])
 
     assert isinstance(ctx, SessionContext)
     assert _accepts_session_context(ctx) == ANKOR_ID

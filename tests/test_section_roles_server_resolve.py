@@ -106,7 +106,7 @@ async def test_kb_search_receives_session_roles_not_recipe_roles() -> None:
 
     await interpreter.run(
         recipe,
-        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", roles=["public"]),
+        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", system_roles=["public"]),
         kb_search=kb_search,
         llm=None,  # type: ignore[arg-type]
         embedding=EmptyEmbedding(),
@@ -129,7 +129,7 @@ async def test_node_params_section_roles_is_overwritten_not_merged() -> None:
 
     await interpreter.run(
         recipe,
-        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", roles=["public", "hr"]),
+        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", system_roles=["public", "hr"]),
         kb_search=kb_search,
         llm=None,  # type: ignore[arg-type]
         embedding=EmptyEmbedding(),
@@ -194,7 +194,7 @@ async def test_malformed_session_roles_fail_closed_through_real_run(bad_roles: o
     'l', 'i', 'c']` — 6 garbage roles, a WIDENING of scope, not deny-all)."""
     kb_search = _RolesCapturingKbSearch()
     recipe = _kb_then_end_recipe(node_params={"section_roles": ["finance"]})
-    bad_session = _FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", roles=bad_roles)  # type: ignore[arg-type]
+    bad_session = _FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", system_roles=bad_roles)  # type: ignore[arg-type]
 
     result = await interpreter.run(
         recipe,

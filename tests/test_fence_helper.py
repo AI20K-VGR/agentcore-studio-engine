@@ -26,7 +26,7 @@ BOREA_ID = UUID("b0000000-0000-0000-0000-000000000001")
 class _FrozenSessionContext:
     tenant_id: UUID
     user: str
-    roles: list[str]
+    system_roles: list[str]
 
 
 # Distinct from `None` — several tests below pass `roles=None` DELIBERATELY
@@ -40,7 +40,7 @@ def _session(tenant_id: UUID = ANKOR_ID, roles: object = _NO_ROLES_GIVEN) -> Ses
     items) to exercise `fenced_kb_params`'s coercion fallback, so the
     constructed double must accept whatever shape a test hands it."""
     actual_roles: object = [] if roles is _NO_ROLES_GIVEN else roles
-    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", roles=actual_roles)  # type: ignore[arg-type]
+    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", system_roles=actual_roles)  # type: ignore[arg-type]
 
 
 def test_session_tenant_overrides_client_declared() -> None:
@@ -101,8 +101,8 @@ def test_no_tenant_type_check_here() -> None:
     class _BadSession:
         tenant_id: object
         user: str
-        roles: list[str]
+        system_roles: list[str]
 
-    bad_session = _BadSession(tenant_id="not-a-uuid", user="u", roles=[])
+    bad_session = _BadSession(tenant_id="not-a-uuid", user="u", system_roles=[])
     result = fenced_kb_params({}, bad_session)  # type: ignore[arg-type]
     assert result["tenant_id"] == "not-a-uuid"

@@ -33,13 +33,13 @@ keyword-only parameter on `run()` (no default), not an optional override a
 caller could omit and fall back to trusting the recipe.
 
 3 members are declared; as of Day 17 (plan `260811-1121-d17-aie1-section-roles-
-server-resolve`) BOTH `tenant_id` and `roles` have a real consumer —
+server-resolve`) BOTH `tenant_id` and `system_roles` have a real consumer —
 `interpreter.run()`'s `NodeType.KB_RETRIEVE` branch overwrites
-`node.params["section_roles"]` with `roles` in the same override that already
+`node.params["section_roles"]` with `system_roles` in the same override that already
 used `tenant_id` (Day 8 INV-1), the T6 label-spoof fence. A caller building
 this Protocol (directly, or via `apps/studio`'s composition root once
 `resolve_section_roles`, #112, lands) must supply the SESSION's real roles:
-`roles=[]` is no longer an inert placeholder, it is silent deny-all at
+`system_roles=[]` is no longer an inert placeholder, it is silent deny-all at
 retrieval. `user` remains the one member with no consumer yet — kept only to
 match `ResolvedContext`'s shape, same precedent as Day 7 threading
 `agent_config.model` before any executor read it.
@@ -66,4 +66,4 @@ class SessionContext(Protocol):
     def user(self) -> str: ...
 
     @property
-    def roles(self) -> list[str]: ...
+    def system_roles(self) -> list[str]: ...

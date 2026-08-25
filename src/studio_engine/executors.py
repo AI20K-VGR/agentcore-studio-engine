@@ -93,7 +93,7 @@ class KbRetrieveExecutor:
     - `section_roles` IS resolved server-side and passed into
       `KbSearch.search(...)` — but NOT by this class. `interpreter.run()`
       (`interpreter.py`, in the `NodeType.KB_RETRIEVE` branch) overwrites
-      `node.params["section_roles"]` with `session_context.roles` BEFORE
+      `node.params["section_roles"]` with `session_context.system_roles` BEFORE
       dispatching to this executor, the same pattern it already used for
       `tenant_id`. By the time `execute()` below reads
       `node.params.get("section_roles", ...)`, a client-declared override
@@ -144,7 +144,7 @@ class KbRetrieveExecutor:
         `node.params` in the real walk (Day 8 INV-1 / Day 17 T6):
         `interpreter.run()` (`interpreter.py`, `NodeType.KB_RETRIEVE` branch)
         always overwrites both with `session_context.tenant_id`/
-        `session_context.roles` before dispatch — server-resolved, never
+        `session_context.system_roles` before dispatch — server-resolved, never
         client-declared. This executor's own reads below (`node.params.get(
         "tenant_id")`, `node.params.get("section_roles", [])`) are exactly
         as-given from whatever `node.params` it is handed; the fence is

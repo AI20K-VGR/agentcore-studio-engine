@@ -174,7 +174,7 @@ async def run(
     default, so no call site can silently skip the fence. Every tenant
     identity AND `section_roles` scope this function emits (the
     `kb-retrieve` node's injected `tenant_id`/`section_roles` params) comes
-    from `session_context.tenant_id`/`session_context.roles`, NEVER from the
+    from `session_context.tenant_id`/`session_context.system_roles`, NEVER from the
     recipe's own client-declared tenant/scope fields — a mismatch (client
     declares one tenant or a wider scope, session resolves to another) is not
     an error, it is simply ignored: the run proceeds scoped to the session's

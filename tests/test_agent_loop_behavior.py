@@ -48,9 +48,9 @@ def _recipe(
     )
 
 
-def _session(tenant_id: UUID = ANKOR_ID, roles: list[str] | None = None) -> _FrozenSessionContext:
+def _session(tenant_id: UUID = ANKOR_ID, system_roles: list[str] | None = None) -> _FrozenSessionContext:
     return _FrozenSessionContext(
-        tenant_id=tenant_id, user="test-user", roles=roles if roles is not None else ["public"]
+        tenant_id=tenant_id, user="test-user", system_roles=system_roles if system_roles is not None else ["public"]
     )
 
 
