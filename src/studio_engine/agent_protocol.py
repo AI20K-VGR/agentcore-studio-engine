@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -233,3 +234,70 @@ def ground_citations(answer: str, chunks: Sequence[KbSearchResultItem]) -> list[
     (`_CITATION_RE.findall`), matching `executors.py:358`."""
     retrieved_ids = {chunk.chunk_id for chunk in chunks}
     return [cid for cid in _CITATION_RE.findall(answer) if cid in retrieved_ids]
+
+
+# --- engine#43 (HB2-25): faithfulness-verify prompt/parse -------------------
+# `ground_citations` above proves PROVENANCE only (cited id was retrieved) — it
+# cannot prove SUBJECT match (the cited chunk actually answers what was asked).
+# The async `llm.complete()` orchestration around these two pure functions
+# lives in `agent_loop.py` — this module stays I/O-free per its own docstring
+# above, DEC-2/A1.
+
+# No diacritics required of the model; `parse_faithfulness_verdict` below
+# normalizes any diacritic form back onto these.
+_FAITHFULNESS_YES = "CO"
+_FAITHFULNESS_NO = "KHONG"
+
+_FAITHFULNESS_PROMPT_TEMPLATE = (
+    "Bạn là bộ kiểm tra căn cứ (grounding check), không phải người trả lời câu hỏi.\n\n"
+    "Câu hỏi gốc: {question}\n\n"
+    "Câu trả lời đã trích dẫn các đoạn sau đây làm căn cứ:\n\n"
+    "{cited_excerpts}\n\n"
+    "Hỏi: TẤT CẢ các đoạn trích trên có thực sự nói về ĐÚNG chủ thể/thực thể mà câu hỏi hỏi đến "
+    "hay không — không chỉ đúng chủ đề chung chung, mà đúng tên riêng/thực thể cụ thể được hỏi? "
+    'Nếu bất kỳ đoạn nào nói về một chủ thể KHÁC câu hỏi (ví dụ câu hỏi hỏi về "Borea" nhưng đoạn '
+    'trích thuộc tài liệu của "Ankor"), câu trả lời là {no}.\n\n'
+    "Trả lời CHỈ MỘT TỪ DUY NHẤT: {yes} hoặc {no}. Không giải thích gì thêm."
+)
+
+
+def build_faithfulness_prompt(question: str, cited_chunks: Sequence[KbSearchResultItem]) -> str:
+    """Pure prompt-builder for engine#43 (HB2-25)'s faithfulness-verify call —
+    the async orchestration (the actual `llm.complete()` call) lives in
+    `agent_loop.py`, per this module's own "no I/O, no async" contract
+    (module docstring, DEC-2/A1). Same `[chunk_id]\\n<text>` excerpt shape as
+    `render_kb_observation` above. `chunk_id` is included alongside `text`
+    DELIBERATELY, not text alone: a prior measurement
+    (`packages/evalhub/docs/evidence/260825-engine43-candidates/`, not yet
+    pushed) found only 253/800 (31.6%) of the real corpus's chunks name their
+    subject inside the chunk TEXT itself; `chunk_id`'s
+    `{tenant-subject-slug}#c{n}` shape (e.g. `ankor-engineering-incident#c6`)
+    names the subject the other 68.4% of the time text alone cannot — a
+    verify call fed text alone was measured answering blind on most of the
+    corpus."""
+    excerpts = "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in cited_chunks)
+    return _FAITHFULNESS_PROMPT_TEMPLATE.format(
+        question=question, cited_excerpts=excerpts, yes=_FAITHFULNESS_YES, no=_FAITHFULNESS_NO
+    )
+
+
+def parse_faithfulness_verdict(raw: str) -> bool:
+    """Diacritic-safe CO/KHONG parse for the faithfulness-verify call above.
+    `raw.strip().upper().startswith("CO")` (the naive form) breaks on the
+    Vietnamese-diacritic "CÓ": `"CÓ".upper()` stays `"CÓ"` (`str.upper()`
+    does not strip combining marks), so it does NOT `.startswith("CO")` even
+    though "CÓ" IS the word this prompt asks for. NFD-normalize + drop every
+    combining mark BEFORE `.upper().startswith(...)` so "CÓ"/"Có"/"có" all
+    collapse onto plain "CO".
+
+    Fails OPEN: only an answer that starts with KHONG (post-normalize)
+    returns `False`; CO and anything else UNPARSEABLE both return `True`. A
+    malformed verdict silently downgrading an already-grounded citation to a
+    refusal would be the SAME over-refusal failure mode the sibling
+    `_CONVENTION_BLOCK`-narrowing candidate was already measured and
+    rejected for (`evalhub#51` README:101 — that change alone dropped a
+    10-run gate from PASS to 0/10 PASS by over-refusing). This function must
+    not reintroduce that failure mode through its own parse ambiguity."""
+    nfd = unicodedata.normalize("NFD", raw.strip())
+    stripped = "".join(ch for ch in nfd if not unicodedata.combining(ch))
+    return not stripped.upper().startswith(_FAITHFULNESS_NO)

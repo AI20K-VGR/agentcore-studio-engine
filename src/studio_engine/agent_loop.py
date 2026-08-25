@@ -105,8 +105,10 @@ from studio_engine.agent_protocol import (
     Observation,
     ToolCall,
     build_agent_prompt,
+    build_faithfulness_prompt,
     ground_citations,
     parse_agent_signal,
+    parse_faithfulness_verdict,
     render_kb_observation,
 )
 from studio_engine.demo_stubs import WhitelistToolDispatch
@@ -214,6 +216,38 @@ def _jsonsafe(value: object) -> object:
     return value
 
 
+async def _verify_citation_faithfulness(
+    llm: LLM, *, question: str, citations: list[str], retrieved: list[KbSearchResultItem], **kwargs: object
+) -> bool:
+    """engine#43 (HB2-25) — second grounding pass, orthogonal to
+    `ground_citations`: PROVENANCE (chunk_id was retrieved) says nothing
+    about SUBJECT match (the cited chunk actually answers what was asked).
+    Money-shot: scope `ankor/engineering`, question about "Borea", model
+    answers from `ankor-engineering-incident#c6` — a REAL, RETRIEVED,
+    validly-provenanced chunk (`ground_citations` returns it unchanged,
+    citation_accuracy scores 1.0) whose subject is still wrong.
+
+    1 extra `llm.complete()` call per final-answer turn that has >=1
+    citation — skipped entirely (no call, no cost) when `citations` is
+    empty, which is the common no-citation-refusal shape (SC-04/SC-05) this
+    loop already emits constantly. NOT free on every turn — surfaced here
+    plainly rather than hidden behind a flag: no feature flag exists for
+    this yet, that tradeoff is left for PR review to weigh.
+
+    Prompt-build/verdict-parse are PURE and live in `agent_protocol.py`
+    (that module's own hard "no I/O, no async" contract, DEC-2/A1); this
+    function is the async orchestration around them and belongs here, next
+    to every other `llm.complete()` call this loop already makes. `**kwargs`
+    is the SAME `{"model": ...}` dict the main-turn call already built —
+    the verify call honors the same recipe-declared model."""
+    if not citations:
+        return True
+    cited = [chunk for chunk in retrieved if chunk.chunk_id in set(citations)]
+    prompt = build_faithfulness_prompt(question, cited)
+    raw = await llm.complete(prompt, **kwargs)
+    return parse_faithfulness_verdict(raw)
+
+
 async def run_agent_loop(
     recipe: Recipe,
     *,
@@ -277,6 +311,18 @@ async def run_agent_loop(
 
         if isinstance(signal, FinalAnswer):
             citations = ground_citations(signal.text, retrieved)
+            if citations and not await _verify_citation_faithfulness(
+                llm, question=question, citations=citations, retrieved=retrieved, **kwargs
+            ):
+                # engine#43 (HB2-25): `ground_citations` only proves PROVENANCE
+                # (the id was retrieved) — it does not prove the cited chunk
+                # actually answers the question's SUBJECT. This 2nd LLM call
+                # catches the "valid chunk_id, wrong subject" hallucination
+                # `ground_citations` structurally cannot see. Stripping here
+                # feeds straight into A5's `refused` formula below unchanged —
+                # a faithfulness failure now reads exactly like "no citation
+                # was grounded", the same refusal shape SC-04/SC-05 already use.
+                citations = []
             # A5 (DEC-4): NOT `not citations` (that is `LlmStepExecutor`'s
             # DAG-walk formula, `executors.py:364`, which assumes the ONLY
             # path is `kb-retrieve -> llm-step` — false here, where a fully

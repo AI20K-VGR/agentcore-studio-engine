@@ -176,6 +176,10 @@ async def test_citations_only_on_final_llm_event() -> None:
         [
             'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
             "Câu trả lời có căn cứ [doc#c1].",
+            # engine#43: a citation-bearing FinalAnswer now triggers a 3rd
+            # `llm.complete()` call (the faithfulness-verify pass) — without
+            # this response `_ScriptedLLM` raises IndexError on that call.
+            "CO",
         ]
     )
     kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
@@ -191,6 +195,127 @@ async def test_citations_only_on_final_llm_event() -> None:
     assert result.events[0].citations is None
     assert result.events[1].citations is None
     assert isinstance(result.events[2].citations, list)
+
+
+# --- engine#43 (HB2-25): faithfulness-verify ---------------------------------
+# `ground_citations` proves PROVENANCE only (cited id was retrieved) — it
+# cannot prove SUBJECT match (the cited chunk actually answers what was
+# asked). A 2nd LLM call, fired only when `citations` is non-empty, catches
+# that gap. All scripted-LLM lists below need a 3rd response for any turn
+# whose FinalAnswer carries a `[chunk_id]` bracket.
+
+
+async def test_faithfulness_verify_skipped_when_no_citations() -> None:
+    llm = _ScriptedLLM(["Trả lời chay."])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(chunks=[]),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    assert llm.calls == 1
+    final = _last_state_entry(result)
+    assert final["citations"] == []
+
+
+async def test_faithfulness_verify_khong_verdict_strips_citation_and_refuses() -> None:
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Câu trả lời có căn cứ [doc#c1].",
+            "KHONG",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    final = _last_state_entry(result)
+    assert final["citations"] == []
+    assert final["refused"] is True
+
+
+async def test_faithfulness_verify_co_verdict_keeps_citation() -> None:
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Câu trả lời có căn cứ [doc#c1].",
+            "CO",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    final = _last_state_entry(result)
+    assert final["citations"] == ["doc#c1"]
+    assert final["refused"] is False
+
+
+async def test_faithfulness_verify_diacritic_co_regression() -> None:
+    # Regression: `.strip().upper().startswith("CO")` (the naive form) does
+    # NOT match "CÓ" — this must not silently strip a valid citation.
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Câu trả lời có căn cứ [doc#c1].",
+            "CÓ",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    final = _last_state_entry(result)
+    assert final["citations"] == ["doc#c1"]
+
+
+async def test_faithfulness_verify_hb2_25_shape() -> None:
+    """Direct-traceability test for the bug this PR fixes: session scoped to
+    Ankor, question about "Borea", model answers from Ankor's own chunk —
+    `ground_citations` alone would score this grounded; the faithfulness
+    verify is what catches the subject mismatch."""
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"Borea P1 incident"}}',
+            "Sự cố P1 của Borea cần xử lý trong dưới 1 giờ [ankor-engineering-incident#c6].",
+            "KHONG",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("ankor-engineering-incident#c6", text="P1 MTTR target: dưới 1 giờ.")])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="Sự cố P1 của Borea cần xử lý trong bao lâu?",
+    )
+    final = _last_state_entry(result)
+    assert final["citations"] == []
+    assert final["refused"] is True
 
 
 async def test_tool_call_turn_maps_to_TOOL_CALL_node_type() -> None:
@@ -747,8 +872,12 @@ async def test_tool_calling_fixture_llm_drives_the_loop() -> None:
 
 
 async def test_tool_calling_fixture_llm_fails_loud_when_out_of_responses() -> None:
+    # engine#43: `tool-call-01.json` now has 3 responses (a faithfulness-verify
+    # verdict was appended as the 3rd) — exhausting it takes 3 successful
+    # calls, not 2.
     llm = ToolCallingFixtureLLM("tool-call-01")
     await llm.complete("p1")
     await llm.complete("p2")
+    await llm.complete("p3")
     with pytest.raises(FixtureError):
-        await llm.complete("p3")
+        await llm.complete("p4")
