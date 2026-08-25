@@ -59,6 +59,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from studio_contracts import KbSearchResultItem
 
@@ -281,23 +282,57 @@ def build_faithfulness_prompt(question: str, cited_chunks: Sequence[KbSearchResu
     )
 
 
-def parse_faithfulness_verdict(raw: str) -> bool:
-    """Diacritic-safe CO/KHONG parse for the faithfulness-verify call above.
-    `raw.strip().upper().startswith("CO")` (the naive form) breaks on the
-    Vietnamese-diacritic "CÓ": `"CÓ".upper()` stays `"CÓ"` (`str.upper()`
-    does not strip combining marks), so it does NOT `.startswith("CO")` even
-    though "CÓ" IS the word this prompt asks for. NFD-normalize + drop every
-    combining mark BEFORE `.upper().startswith(...)` so "CÓ"/"Có"/"có" all
-    collapse onto plain "CO".
+FaithfulnessVerdict = Literal["CO", "KHONG", "UNPARSEABLE"]
 
-    Fails OPEN: only an answer that starts with KHONG (post-normalize)
-    returns `False`; CO and anything else UNPARSEABLE both return `True`. A
-    malformed verdict silently downgrading an already-grounded citation to a
-    refusal would be the SAME over-refusal failure mode the sibling
-    `_CONVENTION_BLOCK`-narrowing candidate was already measured and
-    rejected for (`evalhub#51` README:101 — that change alone dropped a
-    10-run gate from PASS to 0/10 PASS by over-refusing). This function must
-    not reintroduce that failure mode through its own parse ambiguity."""
+_FAITHFULNESS_WORD_RE = re.compile(r"[A-Z]+")
+
+
+def parse_faithfulness_verdict(raw: str) -> FaithfulnessVerdict:
+    """Diacritic-safe, word-boundary CO/KHONG classify for the
+    faithfulness-verify call above. Returns a 3-STATE result, not a bool
+    (PR review point 2, `engine#43`/#46): a bare bool cannot distinguish
+    "the model clearly said CO" from "the answer could not be read at all" —
+    both silently became `True` in the first cut, so a bad measurement could
+    never tell "the verify step ran and judged wrong" apart from "the verify
+    step never produced a readable verdict". The caller (`agent_loop.py`)
+    traces `verdict` into its own `TraceEvent`, so this distinction is
+    actually observable in a run, not just theoretically available.
+
+    Word-boundary detection, NOT `.startswith(...)` (review point 1): the
+    naive `raw.strip().upper().startswith("KHONG")` only reads position 0,
+    so a non-compliant-but-CORRECT answer like "Đoạn trích thuộc tài liệu
+    Ankor nên KHÔNG" — HB2-25's own reasoning shape, the model correctly
+    noticing the chunk is Ankor's while the question asks about Borea — was
+    silently misread as CO. NFD-normalize + drop combining marks so
+    "CÓ"/"Có"/"có" and "KHÔNG"/"Không" all collapse onto plain "CO"/"KHONG",
+    then split into `[A-Z]+` word tokens and check membership: this catches
+    a clear signal ANYWHERE in a longer non-compliant sentence, without the
+    false-positive risk a plain substring `in` check would have (e.g. "CO"
+    inside "CODE" — `findall` only ever yields maximal letter runs, so a
+    partial match inside a longer word can never register).
+
+    KHONG is checked before CO on purpose: the caller only strips a citation
+    on a KHONG verdict, so a clear no-signal must never be shadowed by an
+    incidental "co"-shaped token elsewhere in the same sentence. This can
+    still misclassify a genuinely hedging answer ("Có thể" / "maybe") as CO
+    rather than UNPARSEABLE — accepted: it does not contain KHONG, and the
+    caller's fail-open policy keeps the citation for both CO and
+    UNPARSEABLE anyway, so the two are behaviorally identical for the
+    citation-keep decision; only the trace label differs.
+
+    UNPARSEABLE (neither word present) still means "keep the citation" at
+    the call site — fails OPEN, same policy as before. A malformed verdict
+    silently downgrading an already-grounded citation to a refusal would be
+    the SAME over-refusal failure mode the sibling `_CONVENTION_BLOCK`-
+    narrowing candidate was already measured and rejected for (`evalhub#51`
+    README:101 — that change alone dropped a 10-run gate from PASS to 0/10
+    PASS by over-refusing). This function must not reintroduce that failure
+    mode through its own parse ambiguity."""
     nfd = unicodedata.normalize("NFD", raw.strip())
-    stripped = "".join(ch for ch in nfd if not unicodedata.combining(ch))
-    return not stripped.upper().startswith(_FAITHFULNESS_NO)
+    stripped = "".join(ch for ch in nfd if not unicodedata.combining(ch)).upper()
+    words = set(_FAITHFULNESS_WORD_RE.findall(stripped))
+    if _FAITHFULNESS_NO in words:
+        return "KHONG"
+    if _FAITHFULNESS_YES in words:
+        return "CO"
+    return "UNPARSEABLE"

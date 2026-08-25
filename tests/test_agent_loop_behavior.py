@@ -192,9 +192,12 @@ async def test_citations_only_on_final_llm_event() -> None:
         trace_writer=_CollectingTraceWriter(),
         question="q",
     )
-    assert result.events[0].citations is None
-    assert result.events[1].citations is None
-    assert isinstance(result.events[2].citations, list)
+    # engine#43: the faithfulness-verify call now inserts its own LLM_STEP
+    # event (citations=None, it isn't itself a final answer) BEFORE the real
+    # final-answer event — 4 events now, not 3. Only the LAST event ever
+    # carries a citations list.
+    assert [e.citations for e in result.events[:-1]] == [None, None, None]
+    assert isinstance(result.events[-1].citations, list)
 
 
 # --- engine#43 (HB2-25): faithfulness-verify ---------------------------------
@@ -295,12 +298,15 @@ async def test_faithfulness_verify_hb2_25_shape() -> None:
     """Direct-traceability test for the bug this PR fixes: session scoped to
     Ankor, question about "Borea", model answers from Ankor's own chunk —
     `ground_citations` alone would score this grounded; the faithfulness
-    verify is what catches the subject mismatch."""
+    verify is what catches the subject mismatch. Verify's own answer is the
+    NON-compliant, reasoning-shaped sentence PR review flagged (not the bare
+    "KHONG" the other tests use) — this is the actual regression: word-
+    boundary detection must catch this, not just the tidy single-word form."""
     llm = _ScriptedLLM(
         [
             'TOOL_CALL: {"tool":"kb_search","params":{"query":"Borea P1 incident"}}',
             "Sự cố P1 của Borea cần xử lý trong dưới 1 giờ [ankor-engineering-incident#c6].",
-            "KHONG",
+            "Đoạn trích thuộc tài liệu Ankor nên KHÔNG",
         ]
     )
     kb = _RecordingKbSearch(chunks=[_chunk("ankor-engineering-incident#c6", text="P1 MTTR target: dưới 1 giờ.")])
@@ -316,6 +322,87 @@ async def test_faithfulness_verify_hb2_25_shape() -> None:
     final = _last_state_entry(result)
     assert final["citations"] == []
     assert final["refused"] is True
+    assert final["faithfulness_verdict"] == "KHONG"
+
+
+async def test_faithfulness_verify_event_carries_tokens_cost_and_verdict() -> None:
+    """PR review points 3/5: the verify call must be traced+costed like any
+    other `llm.complete()` turn (not silently free/invisible to the cost
+    system), and must leave an audit trail of WHY a citation was stripped."""
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Câu trả lời có căn cứ [doc#c1].",
+            "KHONG",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    verify_events = [e for e in result.events if e.outputs.get("signal") == "faithfulness-verify"]
+    assert len(verify_events) == 1
+    verify_event = verify_events[0]
+    assert verify_event.tokens is not None
+    assert verify_event.tokens.prompt > 0
+    assert verify_event.cost is not None
+    assert verify_event.cost > 0
+    assert verify_event.outputs["verdict"] == "KHONG"
+    assert verify_event.outputs["citations_checked"] == ["doc#c1"]
+    final = _last_state_entry(result)
+    assert final["faithfulness_verdict"] == "KHONG"
+
+
+async def test_faithfulness_verify_skipped_leaves_no_verify_event() -> None:
+    """Mirror of the cost test above for the skip path: no citations -> no
+    verify call -> no extra TraceEvent, no extra cost. `faithfulness_verdict`
+    on the final answer is `None`, distinguishable from a real "CO" verdict."""
+    llm = _ScriptedLLM(["Trả lời chay."])
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(chunks=[]),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    assert [e for e in result.events if e.outputs.get("signal") == "faithfulness-verify"] == []
+    final = _last_state_entry(result)
+    assert final["faithfulness_verdict"] is None
+
+
+async def test_faithfulness_verify_prompt_truncates_long_chunk_text() -> None:
+    """PR review point 4: `build_faithfulness_prompt` must not embed an
+    unbounded chunk text — each cited chunk's text is truncated the same
+    way `kb-retrieve` observations already are (`_MAX_OBSERVATION_CHARS`)."""
+    long_text = "A" * 5000
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Câu trả lời có căn cứ [doc#c1].",
+            "CO",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1", text=long_text)])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    verify_prompt = llm.prompts[-1]
+    assert long_text not in verify_prompt
+    assert "…[cắt bớt]" in verify_prompt
 
 
 async def test_tool_call_turn_maps_to_TOOL_CALL_node_type() -> None:
@@ -868,7 +955,15 @@ async def test_tool_calling_fixture_llm_drives_the_loop() -> None:
         trace_writer=_CollectingTraceWriter(),
         question="q",
     )
-    assert [e.node_type for e in result.events] == [NodeType.LLM_STEP, NodeType.KB_RETRIEVE, NodeType.LLM_STEP]
+    # engine#43: `tool-call-01.json`'s turn-2 response cites `[doc#c1]`, so a
+    # faithfulness-verify LLM_STEP fires (turn-2's 3rd fixture response,
+    # "CO") before the final-answer LLM_STEP.
+    assert [e.node_type for e in result.events] == [
+        NodeType.LLM_STEP,
+        NodeType.KB_RETRIEVE,
+        NodeType.LLM_STEP,
+        NodeType.LLM_STEP,
+    ]
 
 
 async def test_tool_calling_fixture_llm_fails_loud_when_out_of_responses() -> None:

@@ -263,28 +263,41 @@ def test_build_faithfulness_prompt_includes_question() -> None:
     assert "Sự cố P1 của Borea?" in prompt
 
 
-def test_parse_faithfulness_verdict_co_is_true() -> None:
-    assert parse_faithfulness_verdict("CO") is True
+def test_parse_faithfulness_verdict_co_is_co() -> None:
+    assert parse_faithfulness_verdict("CO") == "CO"
 
 
-def test_parse_faithfulness_verdict_khong_is_false() -> None:
-    assert parse_faithfulness_verdict("KHONG") is False
+def test_parse_faithfulness_verdict_khong_is_khong() -> None:
+    assert parse_faithfulness_verdict("KHONG") == "KHONG"
 
 
-def test_parse_faithfulness_verdict_diacritic_co_is_true() -> None:
+def test_parse_faithfulness_verdict_diacritic_co_is_co() -> None:
     # Regression: `.strip().upper().startswith("CO")` (the naive form) does NOT
     # match "CÓ" — `str.upper()` does not strip Vietnamese combining marks.
-    assert parse_faithfulness_verdict("CÓ") is True
+    assert parse_faithfulness_verdict("CÓ") == "CO"
 
 
-def test_parse_faithfulness_verdict_diacritic_khong_is_false() -> None:
-    assert parse_faithfulness_verdict("KHÔNG") is False
+def test_parse_faithfulness_verdict_diacritic_khong_is_khong() -> None:
+    assert parse_faithfulness_verdict("KHÔNG") == "KHONG"
 
 
-def test_parse_faithfulness_verdict_unparseable_fails_open() -> None:
-    # Fails OPEN: only a verdict starting with KHONG (post-normalize) returns
-    # False. An unparseable answer must not silently downgrade an
-    # already-grounded citation to a refusal — that is the same over-refusal
-    # failure mode the `_CONVENTION_BLOCK`-narrowing candidate was already
-    # measured and rejected for (evalhub#51 README:101).
-    assert parse_faithfulness_verdict("xin chào") is True
+def test_parse_faithfulness_verdict_khong_buried_in_sentence_is_khong() -> None:
+    # PR review (engine#43/#46) regression: `.startswith("KHONG")` reads this
+    # as CO because "KHÔNG" isn't the first word — but this sentence IS
+    # HB2-25's own reasoning shape (the model correctly notices the chunk is
+    # Ankor's while the question asks about Borea). Word-boundary detection
+    # must catch a clear KHONG signal wherever it appears, not just position 0.
+    verdict = parse_faithfulness_verdict("Đoạn trích thuộc tài liệu Ankor nên KHÔNG")
+    assert verdict == "KHONG"
+
+
+def test_parse_faithfulness_verdict_khong_prefixed_by_label_is_khong() -> None:
+    assert parse_faithfulness_verdict("Câu trả lời: KHÔNG") == "KHONG"
+
+
+def test_parse_faithfulness_verdict_no_co_or_khong_word_is_unparseable() -> None:
+    # 3-state, not a bool (PR review point 2): callers must be able to tell
+    # "model said CO" apart from "could not tell", instead of both silently
+    # collapsing into one value the way the first cut did.
+    assert parse_faithfulness_verdict("xin chào") == "UNPARSEABLE"
+    assert parse_faithfulness_verdict("") == "UNPARSEABLE"
