@@ -115,9 +115,19 @@ from studio_engine.fence import fenced_kb_params
 from studio_engine.interpreter import RunResult
 from studio_engine.session import SessionContext
 
-# A2 (DEC-3): worst-case realistic spine path is 5 LLM turns (kb_search ->
-# kb_search refine -> calculator -> current_datetime -> answer); +1 slack.
-DEFAULT_MAX_TURNS = 6
+# A2 (DEC-3) originally pinned this at 6 (worst-case realistic spine path: 5 LLM
+# turns — kb_search -> kb_search refine -> calculator -> current_datetime ->
+# answer — +1 slack). Bumped 6 -> 20 by explicit product decision (Trần Bá Đạt,
+# 2026-08-25), NOT re-derived from a new worst-case-turn-count analysis — no
+# measurement backs "20" the way "6" was measured. Now EQUAL to
+# `_MAX_TURNS_CEILING` below, so DEFAULT_MAX_TURNS effectively IS the ceiling:
+# no caller has headroom left to override upward anymore. Applies to every
+# caller that omits `max_turns` — confirmed both are production paths:
+# `apps/studio/src/studio_app/routes/chat.py` (live user chat) AND
+# `apps/studio/src/studio_app/eval_adapter.py::run_case` (golden-set eval-gate,
+# gates publish) — an eval batch's worst-case LLM-call count per case also
+# rises ~3.3x, not just single-chat latency/cost.
+DEFAULT_MAX_TURNS = 20
 # M4/R9: hard ceiling on what a caller may override `max_turns` to — without
 # this, `max_turns=10_000` turns the cap into a no-op (long-running, token-
 # burning loop) even though a cap exists at all.
