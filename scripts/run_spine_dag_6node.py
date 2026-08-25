@@ -79,7 +79,7 @@ class _SpineSessionContext:
 
     tenant_id: UUID
     user: str
-    roles: list[str]
+    system_roles: list[str]
 
 
 class _NoOpTraceWriter:
@@ -136,7 +136,7 @@ def build_six_node_recipe() -> Recipe:
 
 
 def build_session_context() -> _SpineSessionContext:
-    return _SpineSessionContext(tenant_id=_TENANT_ID, user="d20-spine-demo", roles=["public"])
+    return _SpineSessionContext(tenant_id=_TENANT_ID, user="d20-spine-demo", system_roles=["public"])
 
 
 async def run_spine() -> interpreter.RunResult:

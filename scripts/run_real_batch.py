@@ -86,7 +86,7 @@ class _RealBatchSessionContext:
 
     tenant_id: UUID
     user: str
-    roles: list[str]
+    system_roles: list[str]
 
 
 class _NoOpTraceWriter:
@@ -152,11 +152,11 @@ async def _run() -> list[TraceEvent]:
     result = await interpreter.run(
         _build_recipe(),
         # Day 17 (plan 260811-1121-d17): `interpreter.run()` now server-resolves
-        # `section_roles` from `session_context.roles`, so the session must declare
+        # `section_roles` from `session_context.system_roles`, so the session must declare
         # the role this script's recipe actually needs (`kb_binding.scope="ankor/public"`
         # above, `section_roles=["public"]` on the node) — the engine no longer reads
         # scope from the recipe/node at all.
-        session_context=_RealBatchSessionContext(tenant_id=ANKOR_ID, user="d15-real-batch", roles=["public"]),
+        session_context=_RealBatchSessionContext(tenant_id=ANKOR_ID, user="d15-real-batch", system_roles=["public"]),
         kb_search=StaticKbSearch(),
         llm=_CitingLLM(),
         embedding=EmptyEmbedding(),
