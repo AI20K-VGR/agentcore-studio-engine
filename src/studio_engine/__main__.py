@@ -45,7 +45,7 @@ class _DemoSessionContext:
 
     tenant_id: UUID
     user: str
-    roles: list[str]
+    system_roles: list[str]
 
 
 class _NoOpTraceWriter:
@@ -93,11 +93,11 @@ async def _demo() -> None:
     result = await interpreter.run(
         build_demo_recipe(),
         # Day 17 (plan 260811-1121-d17): `interpreter.run()` now server-resolves
-        # `section_roles` from `session_context.roles` — `roles=[]` here would demo
-        # a demo that always deny-alls retrieval, teaching the wrong lesson to
-        # whoever copies this file, so it declares the role the demo recipe's
+        # `section_roles` from `session_context.system_roles` — `system_roles=[]` here
+        # would demo a demo that always deny-alls retrieval, teaching the wrong lesson
+        # to whoever copies this file, so it declares the role the demo recipe's
         # `kb_binding.scope="ankor/public"` implies.
-        session_context=_DemoSessionContext(tenant_id=ANKOR_ID, user="demo-user", roles=["public"]),
+        session_context=_DemoSessionContext(tenant_id=ANKOR_ID, user="demo-user", system_roles=["public"]),
         kb_search=EmptyKbSearch(),
         llm=FixtureLLM("smoke-01"),
         embedding=EmptyEmbedding(),
