@@ -199,7 +199,7 @@ async def test_cross_tenant_question_yields_empty_retrieval_refusal_and_audit_tr
 
     result = await interpreter.run(
         recipe,
-        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", roles=["public"]),
+        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", system_roles=["public"]),
         kb_search=kb_search,
         llm=llm,
         embedding=EmptyEmbedding(),
@@ -247,7 +247,7 @@ async def test_same_tenant_question_does_retrieve_and_does_not_refuse() -> None:
 
     result = await interpreter.run(
         recipe,
-        session_context=_FrozenSessionContext(tenant_id=BOREA_ID, user="test-user", roles=["public"]),
+        session_context=_FrozenSessionContext(tenant_id=BOREA_ID, user="test-user", system_roles=["public"]),
         kb_search=kb_search,
         llm=llm,
         embedding=EmptyEmbedding(),
@@ -283,7 +283,7 @@ async def test_empty_retrieval_does_not_raise_and_llm_step_receives_empty_chunks
 
     result = await interpreter.run(
         recipe,
-        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", roles=["public"]),
+        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="test-user", system_roles=["public"]),
         kb_search=kb_search,
         llm=llm,
         embedding=EmptyEmbedding(),

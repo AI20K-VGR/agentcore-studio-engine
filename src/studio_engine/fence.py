@@ -40,7 +40,7 @@ there is no `PermissionError`-shaped raise branch for roles the way there is
 for `tenant_id` above — QĐ-7 (plan `260811-1121-d17`).
 
 The real `resolve_session` (SWE, `tenant_wall.py:184-195`) already normalizes
-in production; a malformed `.roles` only reaches this fallback through a
+in production; a malformed `.system_roles` only reaches this fallback through a
 test double that mis-declares it, or (new in the agent-loop path, phase 3) a
 model-declared `section_roles` on a `TOOL_CALL:` payload — the same
 override-after-spread rule closes that off identically to the DAG path.
@@ -58,7 +58,7 @@ def fenced_kb_params(params: Mapping[str, object], session_context: SessionConte
     ...}`, with the 2 session-derived keys always winning over whatever
     `params` already carried (spread first, override after — never merged).
     `params` itself is never mutated."""
-    raw_roles = session_context.roles
+    raw_roles = session_context.system_roles
     section_roles = [str(role) for role in raw_roles] if isinstance(raw_roles, list) else []
     return {
         **params,

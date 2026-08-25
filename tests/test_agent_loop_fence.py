@@ -178,8 +178,8 @@ def _dag_recipe() -> Recipe:
     )
 
 
-def _session(tenant_id: UUID, roles: list[str]) -> _FrozenSessionContext:
-    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", roles=roles)
+def _session(tenant_id: UUID, system_roles: list[str]) -> _FrozenSessionContext:
+    return _FrozenSessionContext(tenant_id=tenant_id, user="test-user", system_roles=system_roles)
 
 
 def _final_answer(result: RunResult) -> dict[str, object]:
@@ -303,7 +303,7 @@ async def test_malformed_session_roles_deny_all_not_widen() -> None:
 
     await agent_loop.run_agent_loop(
         _loop_recipe(),
-        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="u", roles="public"),  # type: ignore[arg-type]
+        session_context=_FrozenSessionContext(tenant_id=ANKOR_ID, user="u", system_roles="public"),  # type: ignore[arg-type]
         kb_search=kb,
         llm=llm,
         embedding=EmptyEmbedding(),
