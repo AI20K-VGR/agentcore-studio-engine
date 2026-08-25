@@ -311,17 +311,40 @@ def parse_faithfulness_verdict(raw: str) -> FaithfulnessVerdict:
     inside "CODE" — `findall` only ever yields maximal letter runs, so a
     partial match inside a longer word can never register).
 
-    KHONG is checked before CO on purpose: the caller only strips a citation
-    on a KHONG verdict, so a clear no-signal must never be shadowed by an
-    incidental "co"-shaped token elsewhere in the same sentence. This can
-    still misclassify a genuinely hedging answer ("Có thể" / "maybe") as CO
-    rather than UNPARSEABLE — accepted: it does not contain KHONG, and the
-    caller's fail-open policy keeps the citation for both CO and
-    UNPARSEABLE anyway, so the two are behaviorally identical for the
-    citation-keep decision; only the trace label differs.
+    BOTH tokens present -> UNPARSEABLE, not a priority pick (PR #46 review
+    round 2 regression, found AFTER the word-boundary fix above shipped):
+    an earlier version of this function checked KHONG before CO, on the
+    theory that a clear no-signal must never be shadowed by an incidental
+    "co"-shaped token elsewhere in the sentence. That is backwards for
+    Vietnamese — "không" is an ordinary negation particle that shows up
+    constantly in explanatory prose regardless of the actual verdict, while
+    "có" rarely appears as a stray word. Reproduced and confirmed against
+    the KHONG-before-CO version:
 
-    UNPARSEABLE (neither word present) still means "keep the citation" at
-    the call site — fails OPEN, same policy as before. A malformed verdict
+        'CÓ, đoạn trích này không hề nói về chủ thể khác'  -> KHONG (should be CO)
+        'Có — không có gì sai ở đây'                        -> KHONG (should be CO)
+        'Đoạn trích KHÔNG sai chủ thể, nên CÓ'               -> KHONG (should be CO)
+
+    All three are a model correctly answering CO while explaining itself
+    with a sentence that happens to contain "không" for something other
+    than the verdict — the priority rule silently turned a correct CO into
+    an over-refusal, the exact failure class this whole faithfulness-verify
+    feature exists to avoid (evalhub#51, cited below). The reviewer's other
+    proposed alternative — take whichever token appears FIRST in the
+    sentence — was checked too and only rescues 2 of the 3 lines above (the
+    third has KHONG appearing before the intended CO). Neither priority
+    order nor position order is safe, so an input containing both tokens is
+    genuinely ambiguous and must fail open like any other unparseable
+    input, not guess a winner. This still correctly classifies a genuinely
+    hedging answer ("Có thể" / "maybe") as UNPARSEABLE rather than picking
+    a side — appropriate, since the caller's fail-open policy keeps the
+    citation for both CO and UNPARSEABLE anyway, so the two are
+    behaviorally identical for the citation-keep decision; only the trace
+    label differs.
+
+    UNPARSEABLE (neither word present, or both present) still means "keep
+    the citation" at the call site — fails OPEN, same policy as before. A
+    malformed verdict
     silently downgrading an already-grounded citation to a refusal would be
     the SAME over-refusal failure mode the sibling `_CONVENTION_BLOCK`-
     narrowing candidate was already measured and rejected for (`evalhub#51`
@@ -331,8 +354,12 @@ def parse_faithfulness_verdict(raw: str) -> FaithfulnessVerdict:
     nfd = unicodedata.normalize("NFD", raw.strip())
     stripped = "".join(ch for ch in nfd if not unicodedata.combining(ch)).upper()
     words = set(_FAITHFULNESS_WORD_RE.findall(stripped))
-    if _FAITHFULNESS_NO in words:
+    has_no = _FAITHFULNESS_NO in words
+    has_co = _FAITHFULNESS_YES in words
+    if has_no and has_co:
+        return "UNPARSEABLE"
+    if has_no:
         return "KHONG"
-    if _FAITHFULNESS_YES in words:
+    if has_co:
         return "CO"
     return "UNPARSEABLE"

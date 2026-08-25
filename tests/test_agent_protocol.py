@@ -301,3 +301,41 @@ def test_parse_faithfulness_verdict_no_co_or_khong_word_is_unparseable() -> None
     # collapsing into one value the way the first cut did.
     assert parse_faithfulness_verdict("xin chào") == "UNPARSEABLE"
     assert parse_faithfulness_verdict("") == "UNPARSEABLE"
+
+
+# --- PR #46 review round 2 regression: KHONG-before-CO priority order -------
+# The word-boundary fix above (round 1) reads a clear KHONG/CO signal ANYWHERE
+# in the sentence, not just position 0 — correct for HB2-25's own reasoning
+# shape. But an earlier version of the function then broke the *other* way:
+# it checked KHONG before CO, so any sentence where the model correctly
+# answers CO but explains itself using "không" (an ordinary Vietnamese
+# negation particle, unrelated to the verdict) got silently misread as
+# KHONG and over-refused — the exact failure class this feature exists to
+# avoid (evalhub#51, see the function's own docstring). Fixed: BOTH tokens
+# present is genuinely ambiguous and must fail open to UNPARSEABLE, not pick
+# a winner by priority or by which token appears first (the reviewer's own
+# alternative — verified separately to only rescue 2 of these 3 sentences).
+
+
+def test_parse_faithfulness_verdict_co_first_khong_word_is_unparseable() -> None:
+    # Model answers CO, then explains using "không" for something else
+    # entirely ("does not at all talk about a different subject") — NOT a
+    # verdict of KHONG. The KHONG-before-CO priority order misread this as
+    # KHONG; must be UNPARSEABLE (ambiguous), which still keeps the citation
+    # at the call site, same as CO would.
+    verdict = parse_faithfulness_verdict("CÓ, đoạn trích này không hề nói về chủ thể khác")
+    assert verdict == "UNPARSEABLE"
+
+
+def test_parse_faithfulness_verdict_khong_word_then_co_is_unparseable() -> None:
+    verdict = parse_faithfulness_verdict("Có — không có gì sai ở đây")
+    assert verdict == "UNPARSEABLE"
+
+
+def test_parse_faithfulness_verdict_khong_word_before_co_verdict_is_unparseable() -> None:
+    # KHONG token appears before the CO token here, so "take whichever
+    # token appears first" (the alternative fix considered and rejected)
+    # would ALSO misread this one as KHONG — only the both-present ->
+    # UNPARSEABLE rule handles all 3 regression sentences correctly.
+    verdict = parse_faithfulness_verdict("Đoạn trích KHÔNG sai chủ thể, nên CÓ")
+    assert verdict == "UNPARSEABLE"
