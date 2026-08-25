@@ -30,7 +30,7 @@ from test_session_context_tenant_wall import ANKOR_ID, BOREA_ID, _FrozenSessionC
 def _recipe(
     tool_whitelist: list[str] | None = None,
     tenant_id: UUID = ANKOR_ID,
-    instructions: str = "",
+    system_prompt: str = "",
     model: str = "",
 ) -> Recipe:
     """Loop is DAG-blind (K8) — `dag` is always empty here on purpose; L12
@@ -39,7 +39,7 @@ def _recipe(
         agent_id="agent-loop-test",
         tenant_id=tenant_id,
         agent_config=AgentConfig(
-            instructions=instructions, model=model, tool_whitelist=tool_whitelist or ["calculator"]
+            system_prompt=system_prompt, model=model, tool_whitelist=tool_whitelist or ["calculator"]
         ),
         dag=Dag(nodes=[], edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="test/scope"),
@@ -673,10 +673,10 @@ async def test_kb_observation_params_are_pre_fence(monkeypatch: pytest.MonkeyPat
     `kb.search` itself only ever sees the session's fenced tenant."""
     captured: list[list[Observation]] = []
 
-    def _capture(*, instructions: str, question: str, tool_names: list[str], observations: list[Observation]) -> str:
+    def _capture(*, system_prompt: str, question: str, tool_names: list[str], observations: list[Observation]) -> str:
         captured.append(list(observations))
         return build_agent_prompt(
-            instructions=instructions, question=question, tool_names=tool_names, observations=observations
+            system_prompt=system_prompt, question=question, tool_names=tool_names, observations=observations
         )
 
     monkeypatch.setattr(agent_loop, "build_agent_prompt", _capture)

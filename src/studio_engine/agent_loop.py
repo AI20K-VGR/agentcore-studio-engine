@@ -253,7 +253,7 @@ async def run_agent_loop(
 
     for i in range(1, max_turns + 1):
         prompt = build_agent_prompt(
-            instructions=recipe.agent_config.instructions,
+            system_prompt=recipe.agent_config.system_prompt,
             question=question,
             tool_names=tool_names,
             observations=observations,

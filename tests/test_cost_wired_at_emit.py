@@ -53,7 +53,7 @@ def _llm_step_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[_TOOL_NAME]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",
@@ -125,7 +125,7 @@ async def test_agent_loop_emits_cost_matching_cost_of_tokens() -> None:
         Recipe(
             agent_id="agent-loop-cost-test",
             tenant_id=ANKOR_ID,
-            agent_config=AgentConfig(instructions="", model="", tool_whitelist=["calculator"]),
+            agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=["calculator"]),
             dag=Dag(nodes=[], edges=[]),
             kb_binding=KbBinding(kb_id="kb-1", scope="test/scope"),
             golden_set_ref="golden-1",
@@ -154,7 +154,7 @@ async def test_agent_loop_cost_nonzero_on_real_tokens() -> None:
         Recipe(
             agent_id="agent-loop-cost-test-2",
             tenant_id=ANKOR_ID,
-            agent_config=AgentConfig(instructions="", model="", tool_whitelist=["calculator"]),
+            agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=["calculator"]),
             dag=Dag(nodes=[], edges=[]),
             kb_binding=KbBinding(kb_id="kb-1", scope="test/scope"),
             golden_set_ref="golden-1",

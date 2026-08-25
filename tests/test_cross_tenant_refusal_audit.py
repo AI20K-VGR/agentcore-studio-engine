@@ -177,7 +177,7 @@ def _cross_tenant_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-cross-tenant",
         tenant_id=BOREA_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n_kb", to="n_llm"), Edge(from_="n_llm", to="n_end")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/finance"),
         golden_set_ref="golden-1",

@@ -93,7 +93,7 @@ def _four_node_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="Trả lời ngắn gọn.", model="m", tool_whitelist=[_TOOL_NAME]),
+        agent_config=AgentConfig(system_prompt="Trả lời ngắn gọn.", model="m", tool_whitelist=[_TOOL_NAME]),
         dag=Dag(
             nodes=[
                 Node(id="n_kb", type=NodeType.KB_RETRIEVE, params={"query": "nghỉ phép bao nhiêu ngày", "top_k": 3}),

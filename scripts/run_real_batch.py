@@ -140,7 +140,7 @@ def _build_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-d15-real-batch",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=edges),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/public"),
         golden_set_ref="golden-1",

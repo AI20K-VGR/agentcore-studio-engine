@@ -150,7 +150,7 @@ def _loop_recipe(tool_whitelist: list[str] | None = None) -> Recipe:
     return Recipe(
         agent_id="agent-loop-fence-test",
         tenant_id=BOREA_ID,  # client-declared; must never be what kb.search sees
-        agent_config=AgentConfig(instructions="", model="", tool_whitelist=tool_whitelist or ["calculator"]),
+        agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=tool_whitelist or ["calculator"]),
         dag=Dag(nodes=[], edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/finance"),
         golden_set_ref="golden-1",
@@ -170,7 +170,7 @@ def _dag_recipe() -> Recipe:
     return Recipe(
         agent_id="agent-parity-test",
         tenant_id=BOREA_ID,
-        agent_config=AgentConfig(instructions="", model="", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n_kb", to="n_llm"), Edge(from_="n_llm", to="n_end")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/finance"),
         golden_set_ref="golden-1",

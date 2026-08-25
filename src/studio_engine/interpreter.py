@@ -332,12 +332,12 @@ async def run(
                         # this gates `refused` (a refusal/security-relevant signal),
                         # so a recipe must never be able to spoof "kb-retrieve ran".
                         "has_kb_upstream": has_kb_upstream,
-                        # Day 7: `agent_config.instructions`/`.model` threaded the
+                        # Day 7: `agent_config.system_prompt`/`.model` threaded the
                         # same way as `retrieved_chunks`/`query` above —
                         # `LlmStepExecutor` reads both from `node.params`, so
                         # swapping `StubEmbedding`→`GatewayEmbedding` (or
                         # `FixtureLLM`→a real gateway LLM) never touches this file.
-                        "instructions": recipe.agent_config.instructions,
+                        "system_prompt": recipe.agent_config.system_prompt,
                         "model": recipe.agent_config.model,
                     }
                 }

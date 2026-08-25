@@ -199,18 +199,18 @@ async def test_recipe_supplied_prompt_is_used_verbatim() -> None:
     assert llm.prompts[0] == "prompt do recipe khai"
 
 
-def test_build_prompt_includes_instructions_when_given() -> None:
-    """Day 7: `agent_config.instructions` must reach the model. `instructions`
+def test_build_prompt_includes_system_prompt_when_given() -> None:
+    """Day 7: `agent_config.system_prompt` must reach the model. `system_prompt`
     is optional (default `""`) so every existing 2-arg call site above keeps
     its exact prior output — this only adds behavior when the caller opts in."""
-    prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
+    prompt = build_prompt("q", [], system_prompt="Bạn là trợ lý HR của tenant ankor.")
 
     assert "Bạn là trợ lý HR của tenant ankor." in prompt
 
 
-def test_build_prompt_without_instructions_starts_with_the_fixed_header() -> None:
-    """No regression: omitting `instructions` must still open the prompt
-    directly with the fixed header — no leading instructions block, no blank
+def test_build_prompt_without_system_prompt_starts_with_the_fixed_header() -> None:
+    """No regression: omitting `system_prompt` must still open the prompt
+    directly with the fixed header — no leading system-prompt block, no blank
     line before it. Pinned against the literal header text (not a
     self-comparison of `build_prompt` against itself, which would pass even if
     the guard branch were removed and the header always got an empty-string
@@ -222,20 +222,20 @@ def test_build_prompt_without_instructions_starts_with_the_fixed_header() -> Non
     )
 
 
-def test_build_prompt_with_instructions_prefixes_before_the_fixed_header() -> None:
-    """The opposite pin: a non-empty `instructions` must appear BEFORE the
+def test_build_prompt_with_system_prompt_prefixes_before_the_fixed_header() -> None:
+    """The opposite pin: a non-empty `system_prompt` must appear BEFORE the
     fixed header, separated by a blank line — proving the two branches in
-    `build_prompt` actually differ, not just that "instructions" appears
+    `build_prompt` actually differ, not just that "system_prompt" appears
     somewhere in a long string."""
-    prompt = build_prompt("q", [], instructions="Bạn là trợ lý HR của tenant ankor.")
+    prompt = build_prompt("q", [], system_prompt="Bạn là trợ lý HR của tenant ankor.")
 
     assert prompt.startswith(
         "Bạn là trợ lý HR của tenant ankor.\n\nBạn là trợ lý nội bộ. Chỉ dùng các đoạn trích dưới đây để trả lời, "
     )
 
 
-async def test_interpreter_threads_agent_config_instructions_and_model_into_llm_step() -> None:
-    """Day 7: `interpreter.run` threads `recipe.agent_config.instructions` into
+async def test_interpreter_threads_agent_config_system_prompt_and_model_into_llm_step() -> None:
+    """Day 7: `interpreter.run` threads `recipe.agent_config.system_prompt` into
     the built prompt and `recipe.agent_config.model` into the LLM call's
     `kwargs["model"]` — same inject-into-params pattern already used for
     `retrieved_chunks`/`query` (`interpreter.py`'s `LLM_STEP` branch). Neither
@@ -256,7 +256,7 @@ async def test_interpreter_threads_agent_config_instructions_and_model_into_llm_
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
         agent_config=AgentConfig(
-            instructions="Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR.",
+            system_prompt="Bạn là trợ lý nội bộ tenant ankor, chỉ trả lời trong phạm vi HR.",
             model="gateway-model-x",
             tool_whitelist=[],
         ),
@@ -295,7 +295,7 @@ async def test_swapping_the_embedding_impl_needs_no_interpreter_change() -> None
     recipe = Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/hr"),
         golden_set_ref="golden-1",
@@ -333,7 +333,7 @@ async def test_interpreter_threads_the_walk_upstream_query_into_llm_step() -> No
     recipe = Recipe(
         agent_id="agent-1",
         tenant_id=ANKOR_ID,
-        agent_config=AgentConfig(instructions="x", model="m", tool_whitelist=[]),
+        agent_config=AgentConfig(system_prompt="x", model="m", tool_whitelist=[]),
         dag=Dag(nodes=nodes, edges=[Edge(from_="n1", to="n2"), Edge(from_="n2", to="n3")]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/finance"),
         golden_set_ref="golden-1",
