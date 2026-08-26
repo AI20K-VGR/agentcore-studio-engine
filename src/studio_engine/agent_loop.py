@@ -83,6 +83,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -104,6 +105,7 @@ from studio_engine.agent_protocol import (
     KB_SEARCH_TOOL,
     FaithfulnessVerdict,
     FinalAnswer,
+    HistoryTurn,
     Observation,
     ToolCall,
     build_agent_prompt,
@@ -143,6 +145,13 @@ _MAX_TOP_K = 10
 # with every retrieved chunk's full text threaded into every later turn.
 _MAX_OBSERVATION_CHARS = 2000
 _TRUNCATION_SUFFIX = "…[cắt bớt]"
+# engine#47 — sliding window over caller-supplied `history` (prior chat
+# turns, from OUTSIDE this run): only the N most recent survive into the
+# prompt, same "cap cứng, không mơ hồ" idiom as the M-series constants above,
+# not a re-derived number of its own. "Most recent" = the TAIL of the list
+# the caller passes in (chronological order, oldest first — same convention
+# `observations` already renders in).
+_MAX_HISTORY_TURNS = 10
 
 
 class AgentLoopExhausted(RuntimeError):
@@ -202,6 +211,20 @@ def _truncate_observation(text: str) -> str:
     if len(text) <= _MAX_OBSERVATION_CHARS:
         return text
     return text[:_MAX_OBSERVATION_CHARS] + _TRUNCATION_SUFFIX
+
+
+def _prepare_history(history: Sequence[HistoryTurn]) -> list[HistoryTurn]:
+    """engine#47 — window THEN truncate, once per run (not once per turn:
+    `history` is fixed for the whole run, unlike `observations` which grows
+    turn-by-turn). Window first so a turn that will be dropped entirely never
+    pays for a truncation pass. `history[-_MAX_HISTORY_TURNS:]` keeps the TAIL
+    (most recent), same "sliding window" as any other cap in this module —
+    a no-op slice when `len(history) <= _MAX_HISTORY_TURNS`."""
+    windowed = history[-_MAX_HISTORY_TURNS:] if len(history) > _MAX_HISTORY_TURNS else history
+    return [
+        HistoryTurn(question=_truncate_observation(turn.question), answer=_truncate_observation(turn.answer))
+        for turn in windowed
+    ]
 
 
 def _jsonsafe(value: object) -> object:
@@ -302,6 +325,7 @@ async def run_agent_loop(
     question: str,
     tool_dispatch: ToolDispatch | None = None,
     max_turns: int = DEFAULT_MAX_TURNS,
+    history: Sequence[HistoryTurn] = (),
 ) -> RunResult:
     """Run the agent loop to completion (a final answer) or raise
     `AgentLoopExhausted` after `max_turns` LLM calls. See module docstring for
@@ -311,10 +335,18 @@ async def run_agent_loop(
     like `LlmStepExecutor.__init__` (`executors.py:229-231`, "unused here")
     so this call site stays shape-compatible with `interpreter.run()`'s and
     does not need a signature change once an embed-using turn exists.
+
+    `history` (engine#47/kit#240) — prior chat turns from OUTSIDE this run,
+    e.g. read from a DB by the caller (`apps/studio`). Keyword-only, defaults
+    to empty so every existing call site (including every existing test) is
+    unaffected. Windowed to the `_MAX_HISTORY_TURNS` most recent turns and
+    truncated per-field ONCE before the loop starts — `history` does not
+    change turn-to-turn within a single run, unlike `observations`.
     """
     if max_turns < 1 or max_turns > _MAX_TURNS_CEILING:
         raise ValueError(f"max_turns must be in [1, {_MAX_TURNS_CEILING}], got {max_turns!r}")
 
+    prepared_history = _prepare_history(history)
     run_id = str(uuid.uuid4())
     whitelist = recipe.agent_config.tool_whitelist
     kb_exec = KbRetrieveExecutor(kb_search)
@@ -344,6 +376,7 @@ async def run_agent_loop(
             question=question,
             tool_names=tool_names,
             observations=observations,
+            history=prepared_history,
         )
         kwargs: dict[str, object] = {"model": recipe.agent_config.model} if recipe.agent_config.model else {}
         raw = await llm.complete(prompt, **kwargs)
