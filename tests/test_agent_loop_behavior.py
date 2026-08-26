@@ -35,12 +35,18 @@ def _recipe(
     model: str = "",
 ) -> Recipe:
     """Loop is DAG-blind (K8) — `dag` is always empty here on purpose; L12
-    below asserts that directly, every other test just relies on it."""
+    below asserts that directly, every other test just relies on it.
+
+    engine#49 (A4 reversed) — default whitelist includes `kb_search` now that it is gated like any
+    other tool: most tests in this file exercise kb_search behavior, not whitelist-narrowing, so the
+    default keeps them passing unchanged. Tests that specifically need `kb_search` excluded pass
+    `tool_whitelist=[...]` explicitly (e.g. `test_non_whitelisted_tool_propagates`,
+    `test_kb_search_not_advertised_when_not_in_whitelist`)."""
     return Recipe(
         agent_id="agent-loop-test",
         tenant_id=tenant_id,
         agent_config=AgentConfig(
-            system_prompt=system_prompt, model=model, tool_whitelist=tool_whitelist or ["calculator"]
+            system_prompt=system_prompt, model=model, tool_whitelist=tool_whitelist or ["calculator", "kb_search"]
         ),
         dag=Dag(nodes=[], edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="test/scope"),
@@ -460,7 +466,7 @@ async def test_exactly_one_final_state_entry_has_answer_key() -> None:
     kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
     dispatch = _RecordingDispatch()
     result = await agent_loop.run_agent_loop(
-        _recipe(tool_whitelist=["calculator"]),
+        _recipe(tool_whitelist=["calculator", "kb_search"]),
         session_context=_session(),
         kb_search=kb,
         llm=llm,
@@ -569,7 +575,7 @@ async def test_node_type_never_outside_three_values() -> None:
     kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
     dispatch = _RecordingDispatch()
     result = await agent_loop.run_agent_loop(
-        _recipe(tool_whitelist=["calculator"]),
+        _recipe(tool_whitelist=["calculator", "kb_search"]),
         session_context=_session(),
         kb_search=kb,
         llm=llm,
@@ -756,6 +762,45 @@ async def test_non_whitelisted_tool_propagates() -> None:
             trace_writer=_CollectingTraceWriter(),
             question="q",
         )
+
+
+# engine#49 — đảo A4: `kb_search` giờ là 1 phần tử BÌNH THƯỜNG của `tool_whitelist`, gate giống
+# hệt mọi tool khác. 2 test dưới khoá đúng 2 nửa của fix: (1) không quảng cáo trong prompt khi
+# không whitelist, (2) dispatch THẬT vẫn bị chặn dù LLM cứ tự phát TOOL_CALL kb_search (nhánh
+# `agent_loop.py:560` trước bản vá KHÔNG kiểm whitelist trước khi dispatch — chỉ đổi `tool_names`
+# ở dòng 375 là không đủ, xem plan engine#49).
+async def test_kb_search_not_advertised_when_not_in_whitelist() -> None:
+    llm = _ScriptedLLM(["Trả lời chay không dùng tool."])
+    await agent_loop.run_agent_loop(
+        _recipe(tool_whitelist=["calculator"]),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    assert "kb_search" not in llm.prompts[0]
+
+
+async def test_kb_search_not_in_whitelist_propagates() -> None:
+    """Mirror `test_non_whitelisted_tool_propagates` — LLM tự phát `TOOL_CALL: kb_search` dù
+    whitelist không có nó (mô phỏng model hallucination/prompt-injection, không phụ thuộc việc
+    prompt có quảng cáo tool hay không). Phải raise CÙNG lỗi/format với mọi tool ngoài whitelist
+    khác, không phải 1 cơ chế lỗi riêng cho kb_search."""
+    kb = _RecordingKbSearch()
+    llm = _ScriptedLLM(['TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}'])
+    with pytest.raises(ValueError, match="tool not in whitelist"):
+        await agent_loop.run_agent_loop(
+            _recipe(tool_whitelist=["calculator"]),
+            session_context=_session(),
+            kb_search=kb,
+            llm=llm,
+            embedding=EmptyEmbedding(),
+            trace_writer=_CollectingTraceWriter(),
+            question="q",
+        )
+    assert kb.calls == []  # thật sự KHÔNG chạm KB, không chỉ raise sau khi đã lỡ chạy
 
 
 async def test_malformed_tool_call_becomes_final_answer_and_stops() -> None:
