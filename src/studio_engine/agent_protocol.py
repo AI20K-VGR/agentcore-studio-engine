@@ -209,13 +209,31 @@ def render_kb_observation(chunks: Sequence[KbSearchResultItem]) -> str:
     return "\n\n".join(f"[{chunk.chunk_id}]\n{chunk.text}" for chunk in chunks)
 
 
-_CONVENTION_BLOCK = (
+_TOOL_CALL_CONVENTION = (
     "Quy ước bắt buộc:\n"
     "- Muốn gọi tool: in CHỈ MỘT DÒNG DUY NHẤT theo đúng dạng\n"
     '  TOOL_CALL: {"tool": "...", "params": {...}}\n'
     "  không thêm chữ nào khác, không bọc code-fence.\n"
-    "- Khi đã đủ thông tin để trả lời: trả lời thẳng bằng văn xuôi và trích dẫn\n"
-    "  chunk_id trong ngoặc vuông, ví dụ [doc-1#c1].\n"
+    "- Khi đã đủ thông tin để trả lời: trả lời thẳng bằng văn xuôi."
+)
+
+# CHỈ nối vào prompt khi `kb_search` thật sự có trong `tool_names` (xem `build_agent_prompt`).
+#
+# Trước bản vá này, đoạn "nếu đoạn trích không chứa câu trả lời, nói không có thông tin" nằm CỐ
+# ĐỊNH trong `_CONVENTION_BLOCK` (tên cũ), dán vào MỌI agent bất kể `tool_whitelist` — kể cả agent
+# không có `kb_search`/tool nào (chế độ "Chatbot LLM Trực Tiếp", `agentcore-studio-web#14`, 1 node
+# `llm-step` đơn). Với agent đó, `render_kb_observation`/phần "đoạn trích" trong observation LUÔN
+# rỗng (`_NO_KB_EXCERPT`) vì chẳng có `kb_search` nào để chạy — nhưng chỉ thị "nếu không có, nói
+# không có thông tin" vẫn có mặt, nên model tuân đúng nghĩa đen và trả lời "Không có thông tin."
+# cho cả câu chào hỏi thường ("xin chào") — không tất định (phụ thuộc model có coi câu hỏi là cần
+# "grounding" hay không), đúng triệu chứng "lúc được lúc không" quan sát được lúc debug trực tiếp.
+#
+# Sửa bằng cách chỉ thêm đoạn "grounding" này khi `kb_search` thật sự nằm trong whitelist — đúng
+# lúc `tool_whitelist` bắt đầu phản ánh đúng "agent này có kb-retrieve hay không" (engine#49, A4
+# reversed) — trước bản vá đó, `kb_search` luôn khả dụng bất kể whitelist nên không có tín hiệu
+# nào để điều kiện hoá theo.
+_GROUNDING_CONVENTION = (
+    "\n- Khi trả lời dựa trên đoạn trích: trích dẫn chunk_id trong ngoặc vuông, ví dụ [doc-1#c1].\n"
     "- Nếu các đoạn trích không chứa câu trả lời: nói rõ là không có thông tin\n"
     "  và KHÔNG trích dẫn gì."
 )
@@ -236,11 +254,20 @@ def build_agent_prompt(
     older context than anything this run has done so far. Both `history` and
     `observations` render in the exact order given — the caller
     (`agent_loop.py`) is responsible for turn ordering and any windowing/
-    truncation policy; this function only renders."""
+    truncation policy; this function only renders.
+
+    The grounding/refusal clause (`_GROUNDING_CONVENTION`) is appended ONLY
+    when `kb_search` is in `tool_names` — an agent with no KB tool never gets
+    told to refuse-if-no-excerpt, since it was never promised any excerpt in
+    the first place (see `_GROUNDING_CONVENTION`'s docstring for the bug this
+    closes)."""
     blocks: list[str] = []
     if system_prompt:
         blocks.append(system_prompt)
-    blocks.append(_CONVENTION_BLOCK)
+    convention = _TOOL_CALL_CONVENTION
+    if KB_SEARCH_TOOL in tool_names:
+        convention += _GROUNDING_CONVENTION
+    blocks.append(convention)
     blocks.append("Tool khả dụng:\n" + render_tool_catalog(tool_names))
     for turn in history:
         blocks.append(f"[Lịch sử] Hỏi: {turn.question}\nĐáp: {turn.answer}")
