@@ -239,6 +239,31 @@ _GROUNDING_CONVENTION = (
 )
 
 
+# CHỈ nối vào prompt khi `kb_search` **không** có trong `tool_names` — bổ sung của `kit#256` lối (D)
+# cho khoảng trống mà `engine#51` để lại.
+#
+# `engine#51` gỡ `_GROUNDING_CONVENTION` cho agent không-KB, và gỡ đúng: chỉ thị đó điều kiện theo
+# *"đoạn trích không chứa câu trả lời"*, mà agent không-KB thì đoạn trích LUÔN rỗng, nên model từ
+# chối cả "xin chào" (đo được ~1/3 lượt).
+#
+# Nhưng gỡ trắng để lại một agent **không được nói cho biết** nó không có tài liệu công ty. Cộng
+# với `web#51` (bỏ `system_prompt` khỏi giao diện, luôn `""`) và `engine#49/#50` (whitelist phản
+# ánh đúng agent có KB hay không), KHÔNG còn mặt phẳng nào khai hành vi đó — model trả lời từ kiến
+# thức nền, tức bịa một chính sách cho một công ty cụ thể.
+#
+# **Khác chỉ thị cũ ở ĐIỀU KIỆN, không ở lời văn**: cái này điều kiện theo **loại câu hỏi** (*"được
+# hỏi về nội dung tài liệu/chính sách"*), cái kia theo **trạng thái dữ liệu** (*"đoạn trích rỗng"*).
+# Câu chào hỏi không rơi vào phạm vi loại câu hỏi, nên bug `engine#51` vá không quay lại. Đó là
+# toàn bộ nội dung của thay đổi này, và `test_khong_dieu_kien_theo_doan_trich_rong` ghim đúng chỗ đó.
+#
+# Cụm "không có thông tin" là thứ `studio_evalhub.no_kb_golden` chấm (`expected`) — hai đầu phải
+# khớp tay, cùng idiom "accepted duplication" đã dùng cho `KB_SEARCH_TOOL` giữa engine và workbench.
+_NO_KB_CONVENTION = (
+    "\n- Bạn KHÔNG có tài liệu nội bộ nào của công ty. Nếu được hỏi về nội dung tài liệu,\n"
+    "  chính sách hay quy định cụ thể của công ty: nói rõ là bạn không có thông tin đó."
+)
+
+
 def build_agent_prompt(
     *,
     system_prompt: str,
@@ -265,8 +290,9 @@ def build_agent_prompt(
     if system_prompt:
         blocks.append(system_prompt)
     convention = _TOOL_CALL_CONVENTION
-    if KB_SEARCH_TOOL in tool_names:
-        convention += _GROUNDING_CONVENTION
+    # Đúng MỘT trong hai nhánh, không bao giờ cả hai và không bao giờ không nhánh nào: mỗi agent
+    # phải biết nó đứng ở phía nào của ranh giới "có tài liệu / không có tài liệu".
+    convention += _GROUNDING_CONVENTION if KB_SEARCH_TOOL in tool_names else _NO_KB_CONVENTION
     blocks.append(convention)
     blocks.append("Tool khả dụng:\n" + render_tool_catalog(tool_names))
     for turn in history:
