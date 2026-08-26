@@ -9,6 +9,7 @@ DAG-walk. Local doubles only (no `studio_kb` import — `.importlinter` forbids
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from uuid import UUID
 
 import pytest
@@ -891,7 +892,7 @@ async def test_kb_observation_params_are_pre_fence(monkeypatch: pytest.MonkeyPat
         question: str,
         tool_names: list[str],
         observations: list[Observation],
-        history: list[HistoryTurn] = [],  # noqa: B006 — never mutated, matches call site's own default
+        history: Sequence[HistoryTurn] = (),  # matches the real call site's own default (PR #48 review point 6)
     ) -> str:
         captured.append(list(observations))
         return build_agent_prompt(
@@ -974,10 +975,57 @@ async def test_history_appears_in_first_prompt() -> None:
     assert "HISTORY_A_MARKER" in llm.prompts[0]
 
 
-async def test_history_window_keeps_only_last_max_turns() -> None:
-    """Issue's own verify case: 15 `HistoryTurn` in, only the 10 most recent
-    (`_MAX_HISTORY_TURNS`) survive into the prompt."""
-    history = [HistoryTurn(question=f"Q{i}", answer=f"A{i}") for i in range(1, 16)]
+async def test_history_persists_into_later_turns() -> None:
+    """PR #48 review point 1 (mutation testing found the gap): every other
+    history test's `_ScriptedLLM` returns a final answer on turn 1, so
+    `llm.prompts[0]` was the ONLY prompt ever built — a regression that drops
+    `history` on every turn AFTER the first (e.g.
+    `history=prepared_history if i == 1 else []`) passed the entire suite
+    silently. This forces a real turn 2 with a `kb_search` tool call first —
+    the exact kit#240 follow-up shape ("còn cái vừa nãy thì sao"), where the
+    model looks something up before composing its answer."""
+    history = [HistoryTurn(question="HISTORY_Q_MARKER", answer="HISTORY_A_MARKER")]
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Trả lời sau khi tra cứu.",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        history=history,
+    )
+    assert len(llm.prompts) == 2
+    assert "HISTORY_Q_MARKER" in llm.prompts[1]
+    assert "HISTORY_A_MARKER" in llm.prompts[1]
+
+
+async def test_history_window_keeps_only_last_max_turns_in_order() -> None:
+    """Issue's own verify case: more turns than the window in, only the N
+    most recent (`_MAX_HISTORY_TURNS`) survive into the prompt, IN ORDER.
+
+    Derived from the constant itself (PR #48 review point 5), not hardcoded
+    10/15/6 — an unrelated change to `_MAX_HISTORY_TURNS` must not fail this
+    test for the wrong reason.
+
+    Order is asserted explicitly (PR #48 review point 2 — mutation testing
+    found the gap): `_prepare_history` reconstructs the list via a slice +
+    list-comprehension, the actual spot a reversed/scrambled order bug would
+    hide, and membership alone (`in`/`not in`, the previous version of this
+    test) cannot catch a reordering — only `test_build_agent_prompt_
+    history_multi_turn_preserves_order` (`test_agent_protocol.py`) locked
+    order, and only at the pure-render layer, never through `run_agent_loop`
+    itself."""
+    n = agent_loop._MAX_HISTORY_TURNS
+    total = n + 5
+    history = [HistoryTurn(question=f"Q{i}", answer=f"A{i}") for i in range(1, total + 1)]
     llm = _ScriptedLLM(["Trả lời ngay."])
     await agent_loop.run_agent_loop(
         _recipe(),
@@ -990,15 +1038,18 @@ async def test_history_window_keeps_only_last_max_turns() -> None:
         history=history,
     )
     prompt = llm.prompts[0]
-    assert agent_loop._MAX_HISTORY_TURNS == 10
-    # Trailing "\n"/word-boundary in the marker itself disambiguates "Q1" from
-    # being a false-positive substring of the KEPT "Q10".."Q15" markers.
-    for i in range(1, 6):
+    dropped = range(1, total - n + 1)
+    kept = range(total - n + 1, total + 1)
+    # Trailing "\n" in the marker disambiguates e.g. "Q1" from being a
+    # false-positive substring of a KEPT "Q10".."Q{total}" marker.
+    for i in dropped:
         assert f"Q{i}\n" not in prompt
         assert f"A{i}\n" not in prompt
-    for i in range(6, 16):
+    for i in kept:
         assert f"Q{i}\n" in prompt
         assert f"A{i}" in prompt
+    kept_positions = [prompt.index(f"Q{i}\n") for i in kept]
+    assert kept_positions == sorted(kept_positions)
 
 
 async def test_history_fields_truncated_before_render() -> None:

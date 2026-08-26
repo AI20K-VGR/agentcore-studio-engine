@@ -66,6 +66,13 @@ Design decisions locked by `plans/260823-1249-engine33-agent-loop/plan.md`
   turn that never called `kb_search` never entered the fence-refusal branch
   this flag exists to measure, so it must not read as one.
 
+  A5 is NOT the only path to `refused=True` — see the engine#47 PR #48
+  review-point-3 note next to the `_verify_citation_faithfulness` call site
+  below: the faithfulness-verify judge is handed the bare current-turn
+  `question`, no `history`, so a context-dependent follow-up can fail that
+  check and read as `refused=True` even with a real, on-topic citation. Left
+  as a follow-up, same as A5 itself.
+
 Deliberate cross-turn duplication in THIS file (plan.md "Trùng lặp CHẤP NHẬN",
 accepted so `interpreter.py`/`executors.py` stay as untouched as possible per
 K2) — each copy below carries a comment pointing at its source. 2 more items
@@ -151,6 +158,13 @@ _TRUNCATION_SUFFIX = "…[cắt bớt]"
 # not a re-derived number of its own. "Most recent" = the TAIL of the list
 # the caller passes in (chronological order, oldest first — same convention
 # `observations` already renders in).
+#
+# Prompt-budget note for `apps/studio` (engine#47 PR #48 review, non-blocking):
+# worst case this adds `_MAX_HISTORY_TURNS * 2 fields * _MAX_OBSERVATION_CHARS`
+# (~40KB) to EVERY turn's prompt, and this loop can run up to `DEFAULT_MAX_TURNS`
+# (20) turns per call — a real, `Tokens`-counted cost increase, not just a
+# larger string. The caller deciding how many DB rows to pass as `history`
+# should know this before assuming "pass everything, the loop will cap it" is free.
 _MAX_HISTORY_TURNS = 10
 
 
@@ -218,9 +232,11 @@ def _prepare_history(history: Sequence[HistoryTurn]) -> list[HistoryTurn]:
     `history` is fixed for the whole run, unlike `observations` which grows
     turn-by-turn). Window first so a turn that will be dropped entirely never
     pays for a truncation pass. `history[-_MAX_HISTORY_TURNS:]` keeps the TAIL
-    (most recent), same "sliding window" as any other cap in this module —
-    a no-op slice when `len(history) <= _MAX_HISTORY_TURNS`."""
-    windowed = history[-_MAX_HISTORY_TURNS:] if len(history) > _MAX_HISTORY_TURNS else history
+    (most recent), same "sliding window" as any other cap in this module.
+    Python slicing already no-ops when `len(history) <= _MAX_HISTORY_TURNS`
+    (a negative start past the beginning just clamps to 0) — no `if` needed
+    (PR #48 review point 4)."""
+    windowed = history[-_MAX_HISTORY_TURNS:]
     return [
         HistoryTurn(question=_truncate_observation(turn.question), answer=_truncate_observation(turn.answer))
         for turn in windowed
@@ -392,6 +408,26 @@ async def run_agent_loop(
             # actually answers the question's SUBJECT. This 2nd LLM call
             # catches the "valid chunk_id, wrong subject" hallucination
             # `ground_citations` structurally cannot see.
+            #
+            # engine#47 PR #48 review point 3 (documented, deliberately NOT
+            # fixed this PR): `question` here is the bare CURRENT-turn
+            # question, `history` is never threaded into
+            # `build_faithfulness_prompt`. For a context-dependent follow-up
+            # ("còn cái vừa nãy thì sao" — kit#240's own worked example), the
+            # judge model is asked, literally, whether the cited chunk
+            # answers THAT sentence alone — very likely `KHONG` on a
+            # perfectly good citation, which flows into `check.keep_citations
+            # = False` -> `citations = []` -> (with `used_kb_search=True`,
+            # `used_non_kb_tool=False`) `refused=True` below. This is a
+            # SECOND path to `refused=True` beyond the one A5 documents, one
+            # that fires on the ORDINARY case (model DID call `kb_search`
+            # again this turn), not just A5's fenced/no-citation edge case —
+            # kit#240's own Verify section ("KHÔNG bị gắn nhầm refused=true")
+            # is not yet fully covered by this PR. Threading `history` into
+            # the faithfulness prompt is a real fix but a separate decision
+            # (extra prompt size/cost on every verify call) — left as a
+            # follow-up once real usage data exists, same reasoning A5 itself
+            # already uses to stay out of scope here.
             check = await _verify_citation_faithfulness(
                 llm, question=question, citations=citations, retrieved=retrieved, **kwargs
             )
