@@ -44,12 +44,34 @@ Design decisions locked by `plans/260823-1249-engine33-agent-loop/plan.md`
   risk for the DAG-walk fallback (DEC-A); this loop is greenfield and does
   not inherit that defect.
 - A3: `question` keyword-only, no default (see Handoff #1 above).
-- A4: `kb_search` is ALWAYS available and is never gated by
-  `tool_whitelist` — inferred from `run()`'s own wiring
-  (`interpreter.py:251-261` pre-refactor / now via `fenced_kb_params`):
-  `KbRetrieveExecutor` never receives a whitelist, only `ToolCallExecutor`
-  does. `recipe.kb_binding` is a REQUIRED field on every `Recipe`
-  (`recipe.py:106`), so `kb_search` is structurally always in scope.
+- A4 (REVERSED, engine#49, 2026-08-26): `kb_search` is now a NORMAL member of
+  `tool_whitelist`, gated exactly like `calculator`/`current_datetime` — the
+  ORIGINAL A4 ("kb_search is ALWAYS available and is never gated by
+  `tool_whitelist`") is retired. That original reasoning ("`recipe.kb_binding`
+  is a REQUIRED field on every `Recipe`, so `kb_search` is structurally
+  always in scope") conflated a schema-required field with product intent:
+  `kb_binding` is populated from 2 fixed form fields on EVERY recipe
+  regardless of whether the canvas has a `kb-retrieve` node, so its mere
+  presence never actually signalled "this agent wants KB search". Cross-repo
+  audit (engine#49) found the ORIGINAL A4 had spread into a hard, tested
+  invariant across 4 repos (`packages/workbench/validator.py`'s
+  `agent_shape_lint` REJECTED any `tool_whitelist` containing `"kb_search"`,
+  mirrored in `apps/web/src/recipe/graphLint.ts` + its `check-lint-parity.ts`
+  case, plus `apps/web/src/recipe/fromCanvas.ts::deriveToolWhitelist()`
+  deliberately excluding the `kb-retrieve` node from whitelist derivation) —
+  all 4 reversed together (`agentcore-studio-workbench#57`,
+  `agentcore-studio-web#52`, this PR, `agentcore-studio-app` companion PR).
+  `tool_names` below is now built straight from `whitelist` (no hardcoded
+  `KB_SEARCH_TOOL` prepend), and the `KB_SEARCH_TOOL` dispatch branch now
+  checks whitelist membership BEFORE dispatching — the original A4-era code
+  dispatched `kb_search` unconditionally on any `TOOL_CALL: {"tool":"kb_search"}`
+  signal regardless of `tool_names`/`whitelist` content, so merely removing
+  the prompt-catalog prepend would NOT have stopped a model that still emits
+  the tool call (hallucination or otherwise) from actually reaching the KB —
+  the dispatch-side check is the real fix, the prompt-side change alone is
+  cosmetic. `apps/web`'s `fromCanvas.ts::deriveToolWhitelist()` now derives
+  `kb_search` from canvas `kb-retrieve` node presence, same mechanism
+  `calculator`/`current_datetime` already used for `tool-call` nodes.
 - A5: `refused = used_kb_search and (not citations) and (not used_non_kb_tool)`
   — see the branch below for the full truth table this pins (money-shot
   cross-tenant case, calculator-only case, mixed case, no-tool case).
@@ -372,7 +394,10 @@ async def run_agent_loop(
             whitelist,
         )
     )
-    tool_names = [KB_SEARCH_TOOL, *whitelist]
+    # engine#49 (A4 reversed) — `kb_search` is now just another entry in `whitelist`, no longer
+    # hardcoded into the catalog regardless of it. `apps/web::deriveToolWhitelist()` puts it here
+    # when the canvas has a `kb-retrieve` node, same mechanism `calculator`/`current_datetime` use.
+    tool_names = list(whitelist)
 
     observations: list[Observation] = []
     retrieved: list[KbSearchResultItem] = []
@@ -557,7 +582,14 @@ async def run_agent_loop(
                 turns=max_turns,
             )
 
-        if signal.tool == KB_SEARCH_TOOL:
+        # engine#49 (A4 reversed) — `and KB_SEARCH_TOOL in whitelist` is the actual fix, not the
+        # `tool_names` change above: this branch used to dispatch `kb_search` UNCONDITIONALLY on
+        # any `TOOL_CALL: {"tool":"kb_search"}` signal, never consulting `whitelist` — only the
+        # `else` branch below (`tool_exec.execute()` -> `WhitelistGuardedDispatch`) ever checked
+        # membership. Not in whitelist -> falls through to that `else` branch, which raises the
+        # SAME `ValueError(f"tool not in whitelist: {tool}")` any other out-of-whitelist tool gets
+        # (`executors.py:588`) — no separate error path for kb_search.
+        if signal.tool == KB_SEARCH_TOOL and KB_SEARCH_TOOL in whitelist:
             top_k = _normalise_top_k(signal.params.get("top_k", _DEFAULT_TOP_K))
             fenced_params = fenced_kb_params({**signal.params, "top_k": top_k}, session_context)
             kb_node = Node(id=f"t{i}-kb-search", type=NodeType.KB_RETRIEVE, params=fenced_params)

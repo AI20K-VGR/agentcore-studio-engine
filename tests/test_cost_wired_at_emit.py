@@ -125,7 +125,7 @@ async def test_agent_loop_emits_cost_matching_cost_of_tokens() -> None:
         Recipe(
             agent_id="agent-loop-cost-test",
             tenant_id=ANKOR_ID,
-            agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=["calculator"]),
+            agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=["calculator", "kb_search"]),
             dag=Dag(nodes=[], edges=[]),
             kb_binding=KbBinding(kb_id="kb-1", scope="test/scope"),
             golden_set_ref="golden-1",

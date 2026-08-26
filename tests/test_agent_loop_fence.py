@@ -146,11 +146,16 @@ class _CollectingTraceWriter:
 
 def _loop_recipe(tool_whitelist: list[str] | None = None) -> Recipe:
     """DAG-blind (K8) — always empty `dag`, matching `run_agent_loop`'s own
-    contract; only `agent_config`/`kb_binding` fields matter to the loop."""
+    contract; only `agent_config`/`kb_binding` fields matter to the loop.
+
+    engine#49 (A4 reversed) — default whitelist includes `kb_search` (this file's tests exercise
+    kb_search fence behavior, not whitelist-narrowing)."""
     return Recipe(
         agent_id="agent-loop-fence-test",
         tenant_id=BOREA_ID,  # client-declared; must never be what kb.search sees
-        agent_config=AgentConfig(system_prompt="", model="", tool_whitelist=tool_whitelist or ["calculator"]),
+        agent_config=AgentConfig(
+            system_prompt="", model="", tool_whitelist=tool_whitelist or ["calculator", "kb_search"]
+        ),
         dag=Dag(nodes=[], edges=[]),
         kb_binding=KbBinding(kb_id="kb-1", scope="ankor/finance"),
         golden_set_ref="golden-1",
@@ -359,7 +364,7 @@ async def test_cap_is_llm_calls_not_tool_calls() -> None:
 
     with pytest.raises(agent_loop.AgentLoopExhausted) as excinfo:
         await agent_loop.run_agent_loop(
-            _loop_recipe(tool_whitelist=["calculator"]),
+            _loop_recipe(tool_whitelist=["calculator", "kb_search"]),
             session_context=_session(ANKOR_ID, ["public"]),
             kb_search=kb,
             llm=llm,
