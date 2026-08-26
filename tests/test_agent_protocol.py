@@ -20,6 +20,8 @@ from studio_contracts import KbSearchResultItem
 from studio_engine.agent_protocol import (
     _TOOL_CALL_MAX_LEN,
     FinalAnswer,
+    HistoryTurn,
+    Observation,
     ToolCall,
     build_agent_prompt,
     build_faithfulness_prompt,
@@ -196,8 +198,6 @@ def test_prompt_contains_question_system_prompt_tools_and_convention() -> None:
 
 
 def test_observations_rendered_in_order() -> None:
-    from studio_engine.agent_protocol import Observation
-
     obs1 = Observation(tool="kb_search", params={}, result_text="OBS_MARKER_ONE")
     obs2 = Observation(tool="calculator", params={}, result_text="OBS_MARKER_TWO")
     prompt = build_agent_prompt(
@@ -207,6 +207,50 @@ def test_observations_rendered_in_order() -> None:
         observations=[obs1, obs2],
     )
     assert prompt.index("OBS_MARKER_ONE") < prompt.index("OBS_MARKER_TWO")
+
+
+# --- engine#47: history (multi-turn context control) ------------------------
+# `HistoryTurn` carries one prior Q/A pair from a PREVIOUS chat turn (a
+# different `run_agent_loop()` call), not this run's own `observations` —
+# `build_agent_prompt` renders it BEFORE the current turn's observations
+# (issue's own ordering requirement). Sliding-window cap and per-field
+# truncation are `agent_loop.py`'s job (`_MAX_HISTORY_TURNS`,
+# `_truncate_observation`) — this module only renders whatever list it is
+# given, in order, same "pure, no policy" split as `observations` already has.
+
+
+def test_build_agent_prompt_history_renders_before_current_observations() -> None:
+    history = [HistoryTurn(question="HISTORY_Q_MARKER", answer="HISTORY_A_MARKER")]
+    obs = [Observation(tool="kb_search", params={}, result_text="CURRENT_OBS_MARKER")]
+    prompt = build_agent_prompt(
+        system_prompt="",
+        question="q",
+        tool_names=["kb_search"],
+        observations=obs,
+        history=history,
+    )
+    assert "HISTORY_Q_MARKER" in prompt
+    assert "HISTORY_A_MARKER" in prompt
+    assert prompt.index("HISTORY_Q_MARKER") < prompt.index("CURRENT_OBS_MARKER")
+
+
+def test_build_agent_prompt_history_multi_turn_preserves_order() -> None:
+    history = [
+        HistoryTurn(question="Q_FIRST", answer="A_FIRST"),
+        HistoryTurn(question="Q_SECOND", answer="A_SECOND"),
+    ]
+    prompt = build_agent_prompt(
+        system_prompt="", question="q", tool_names=["kb_search"], observations=[], history=history
+    )
+    assert prompt.index("Q_FIRST") < prompt.index("Q_SECOND")
+
+
+def test_build_agent_prompt_default_history_is_empty_and_backward_compatible() -> None:
+    # Every existing call site (including every other test in this file) omits
+    # `history` entirely — must still work, and must render no "[Lịch sử]"
+    # block at all when there is none to render.
+    prompt = build_agent_prompt(system_prompt="", question="q", tool_names=["kb_search"], observations=[])
+    assert "Lịch sử" not in prompt
 
 
 def test_kb_observation_renders_bracket_id_on_own_line() -> None:

@@ -9,6 +9,7 @@ DAG-walk. Local doubles only (no `studio_kb` import — `.importlinter` forbids
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from uuid import UUID
 
 import pytest
@@ -22,7 +23,7 @@ from studio_contracts import (
     ScorecardThreshold,
 )
 from studio_engine import RunResult, agent_loop
-from studio_engine.agent_protocol import Observation, build_agent_prompt
+from studio_engine.agent_protocol import HistoryTurn, Observation, build_agent_prompt
 from studio_engine.demo_stubs import EmptyEmbedding, FixtureError, ToolCallingFixtureLLM
 from test_session_context_tenant_wall import ANKOR_ID, BOREA_ID, _FrozenSessionContext
 
@@ -885,10 +886,21 @@ async def test_kb_observation_params_are_pre_fence(monkeypatch: pytest.MonkeyPat
     `kb.search` itself only ever sees the session's fenced tenant."""
     captured: list[list[Observation]] = []
 
-    def _capture(*, system_prompt: str, question: str, tool_names: list[str], observations: list[Observation]) -> str:
+    def _capture(
+        *,
+        system_prompt: str,
+        question: str,
+        tool_names: list[str],
+        observations: list[Observation],
+        history: Sequence[HistoryTurn] = (),  # matches the real call site's own default (PR #48 review point 6)
+    ) -> str:
         captured.append(list(observations))
         return build_agent_prompt(
-            system_prompt=system_prompt, question=question, tool_names=tool_names, observations=observations
+            system_prompt=system_prompt,
+            question=question,
+            tool_names=tool_names,
+            observations=observations,
+            history=history,
         )
 
     monkeypatch.setattr(agent_loop, "build_agent_prompt", _capture)
@@ -937,6 +949,140 @@ async def test_non_kb_result_items_filtered_out_of_trace() -> None:
     first_chunk = chunks_out[0]
     assert isinstance(first_chunk, dict)
     assert first_chunk["chunk_id"] == "doc#c1"
+
+
+# --- engine#47: history (multi-turn context control) ------------------------
+# `history` carries prior chat turns from OUTSIDE this run (the caller —
+# `apps/studio` — reads them from a DB and passes them in); it is unrelated to
+# `observations`, which is this run's OWN tool-call transcript. Default `()`
+# so every test above (and every existing production call site) is unaffected.
+
+
+async def test_history_appears_in_first_prompt() -> None:
+    history = [HistoryTurn(question="HISTORY_Q_MARKER", answer="HISTORY_A_MARKER")]
+    llm = _ScriptedLLM(["Trả lời ngay."])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        history=history,
+    )
+    assert "HISTORY_Q_MARKER" in llm.prompts[0]
+    assert "HISTORY_A_MARKER" in llm.prompts[0]
+
+
+async def test_history_persists_into_later_turns() -> None:
+    """PR #48 review point 1 (mutation testing found the gap): every other
+    history test's `_ScriptedLLM` returns a final answer on turn 1, so
+    `llm.prompts[0]` was the ONLY prompt ever built — a regression that drops
+    `history` on every turn AFTER the first (e.g.
+    `history=prepared_history if i == 1 else []`) passed the entire suite
+    silently. This forces a real turn 2 with a `kb_search` tool call first —
+    the exact kit#240 follow-up shape ("còn cái vừa nãy thì sao"), where the
+    model looks something up before composing its answer."""
+    history = [HistoryTurn(question="HISTORY_Q_MARKER", answer="HISTORY_A_MARKER")]
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"x"}}',
+            "Trả lời sau khi tra cứu.",
+        ]
+    )
+    kb = _RecordingKbSearch(chunks=[_chunk("doc#c1")])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=kb,
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        history=history,
+    )
+    assert len(llm.prompts) == 2
+    assert "HISTORY_Q_MARKER" in llm.prompts[1]
+    assert "HISTORY_A_MARKER" in llm.prompts[1]
+
+
+async def test_history_window_keeps_only_last_max_turns_in_order() -> None:
+    """Issue's own verify case: more turns than the window in, only the N
+    most recent (`_MAX_HISTORY_TURNS`) survive into the prompt, IN ORDER.
+
+    Derived from the constant itself (PR #48 review point 5), not hardcoded
+    10/15/6 — an unrelated change to `_MAX_HISTORY_TURNS` must not fail this
+    test for the wrong reason.
+
+    Order is asserted explicitly (PR #48 review point 2 — mutation testing
+    found the gap): `_prepare_history` reconstructs the list via a slice +
+    list-comprehension, the actual spot a reversed/scrambled order bug would
+    hide, and membership alone (`in`/`not in`, the previous version of this
+    test) cannot catch a reordering — only `test_build_agent_prompt_
+    history_multi_turn_preserves_order` (`test_agent_protocol.py`) locked
+    order, and only at the pure-render layer, never through `run_agent_loop`
+    itself."""
+    n = agent_loop._MAX_HISTORY_TURNS
+    total = n + 5
+    history = [HistoryTurn(question=f"Q{i}", answer=f"A{i}") for i in range(1, total + 1)]
+    llm = _ScriptedLLM(["Trả lời ngay."])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        history=history,
+    )
+    prompt = llm.prompts[0]
+    dropped = range(1, total - n + 1)
+    kept = range(total - n + 1, total + 1)
+    # Trailing "\n" in the marker disambiguates e.g. "Q1" from being a
+    # false-positive substring of a KEPT "Q10".."Q{total}" marker.
+    for i in dropped:
+        assert f"Q{i}\n" not in prompt
+        assert f"A{i}\n" not in prompt
+    for i in kept:
+        assert f"Q{i}\n" in prompt
+        assert f"A{i}" in prompt
+    kept_positions = [prompt.index(f"Q{i}\n") for i in kept]
+    assert kept_positions == sorted(kept_positions)
+
+
+async def test_history_fields_truncated_before_render() -> None:
+    long_answer = "x" * 10_000
+    history = [HistoryTurn(question="q-cũ", answer=long_answer)]
+    llm = _ScriptedLLM(["Trả lời ngay."])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        history=history,
+    )
+    prompt = llm.prompts[0]
+    assert long_answer not in prompt
+    assert "…[cắt bớt]" in prompt
+
+
+async def test_history_default_empty_is_backward_compatible() -> None:
+    llm = _ScriptedLLM(["Trả lời ngay."])
+    await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+    assert "Lịch sử" not in llm.prompts[0]
 
 
 # --- ToolCallingFixtureLLM (H3/R2) — drives the tool-call branch from a real,

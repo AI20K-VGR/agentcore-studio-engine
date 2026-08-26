@@ -133,6 +133,23 @@ class Observation:
     result_text: str
 
 
+@dataclass(frozen=True)
+class HistoryTurn:
+    """One completed Q/A pair from a PREVIOUS chat turn — a different
+    `run_agent_loop()` call, threaded in by the caller (`apps/studio` reads it
+    from a DB) so a follow-up question can reference earlier context
+    (engine#47 / kit#240 "context control"). Unrelated to `Observation` above,
+    which is THIS run's own tool-call transcript accumulated turn-by-turn;
+    `history` is fixed for the whole run, `observations` grows as it runs.
+    The sliding-window cap (`_MAX_HISTORY_TURNS`) and per-field truncation are
+    `agent_loop.py`'s policy, not this module's — this dataclass and
+    `build_agent_prompt` below only carry/render whatever list they are
+    given, same "no policy" split `Observation` already has."""
+
+    question: str
+    answer: str
+
+
 def _strip_code_fence(text: str) -> str:
     """N2 — remove exactly one outer ``` ... ``` layer if the WHOLE (already
     N1-stripped) string is wrapped in one. A fence that does not wrap the whole
@@ -210,16 +227,23 @@ def build_agent_prompt(
     question: str,
     tool_names: Sequence[str],
     observations: Sequence[Observation],
+    history: Sequence[HistoryTurn] = (),
 ) -> str:
     """Assemble the full prompt for one loop turn: `system_prompt` (if any) ->
-    tool-call convention block + catalog -> observation transcript, in order ->
-    the question. `observations` render in the exact order given — the caller
-    (`agent_loop.py`) is responsible for turn ordering."""
+    tool-call convention block + catalog -> `history` (prior chat turns, if
+    any) -> THIS run's own observation transcript, in order -> the question.
+    `history` renders BEFORE `observations` (engine#47): a prior turn's Q/A is
+    older context than anything this run has done so far. Both `history` and
+    `observations` render in the exact order given — the caller
+    (`agent_loop.py`) is responsible for turn ordering and any windowing/
+    truncation policy; this function only renders."""
     blocks: list[str] = []
     if system_prompt:
         blocks.append(system_prompt)
     blocks.append(_CONVENTION_BLOCK)
     blocks.append("Tool khả dụng:\n" + render_tool_catalog(tool_names))
+    for turn in history:
+        blocks.append(f"[Lịch sử] Hỏi: {turn.question}\nĐáp: {turn.answer}")
     for obs in observations:
         blocks.append(f"[Kết quả {obs.tool}]\n{obs.result_text}")
     blocks.append(f"Câu hỏi: {question}")
