@@ -1167,3 +1167,92 @@ async def test_tool_calling_fixture_llm_fails_loud_when_out_of_responses() -> No
     await llm.complete("p3")
     with pytest.raises(FixtureError):
         await llm.complete("p4")
+
+
+async def test_trace_carries_the_top_k_that_actually_ran() -> None:
+    """Sự kiện `tool-call` phải nói `top_k` THẬT SỰ chạy, không chỉ `top_k` model xin.
+
+    Catalog khai `top_k` là **tuỳ chọn** (`{"query": str, "top_k"?: int}`), nên model có quyền không
+    khai — và `_normalise_top_k` rơi về `_DEFAULT_TOP_K`. Nhưng trace ghi `signal.params`, tức params
+    **gốc của model**, nên giá trị thực sự chạy VÔ HÌNH.
+
+    Đo trên một hệ thật: 141/411 lượt gọi `kb_search` không khai `top_k`, và trace của chúng chỉ in
+    `{"query": ...}` — người đọc không có cách nào biết `5` từ đâu ra, hay có phải `5` không.
+
+    Tính ở engine chứ không ở tầng hiển thị: luật rơi-về-mặc-định (`0 -> 5`, `"abc" -> 5`,
+    `9999 -> 10`) nằm ở `_normalise_top_k`, và cho client suy lại là dựng nguồn sự thật thứ hai —
+    nó sẽ lệch đúng vào ngày luật đổi, âm thầm, vì cả hai bên đều in ra một con số trông hợp lý."""
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"nghỉ phép"}}',
+            "Không có thông tin.",
+        ]
+    )
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+
+    tool_call = result.events[0].outputs["tool_call"]
+    assert isinstance(tool_call, dict)
+    # Giữ NGUYÊN params model xin — người đọc cần thấy model đã hỏi gì.
+    assert tool_call["params"] == {"query": "nghỉ phép"}
+    # Và nói thêm giá trị thật sự chạy.
+    assert tool_call["effective_top_k"] == agent_loop._DEFAULT_TOP_K
+
+
+async def test_trace_shows_a_coerced_top_k_differs_from_what_the_model_asked() -> None:
+    """Đối trọng: model khai `top_k` NGOÀI khoảng thì trace phải cho thấy hai con số KHÁC nhau.
+
+    Thiếu bài này, `effective_top_k` có thể chỉ là bản sao mù của `params["top_k"]` và vẫn xanh ở
+    bài trên — trong khi đúng những ca bị ép giá trị mới là ca người đọc cần thấy nhất."""
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"kb_search","params":{"query":"q","top_k":9999}}',
+            "Không có thông tin.",
+        ]
+    )
+    result = await agent_loop.run_agent_loop(
+        _recipe(),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+    )
+
+    tool_call = result.events[0].outputs["tool_call"]
+    assert isinstance(tool_call, dict)
+    assert tool_call["params"]["top_k"] == 9999
+    assert tool_call["effective_top_k"] == 10, "phải là giá trị ĐÃ kẹp, không phải con số model xin"
+
+
+async def test_a_non_kb_tool_call_has_no_top_k_in_its_trace() -> None:
+    """`effective_top_k` chỉ có nghĩa với `kb_search`. Gắn nó vào mọi tool là bịa một tham số mà
+    tool đó không nhận, và người đọc sẽ đi tìm nó trong tài liệu của `calculator`."""
+    llm = _ScriptedLLM(
+        [
+            'TOOL_CALL: {"tool":"calculator","params":{"expression":"3+5"}}',
+            "Kết quả là 8.",
+        ]
+    )
+    result = await agent_loop.run_agent_loop(
+        _recipe(tool_whitelist=["calculator"]),
+        session_context=_session(),
+        kb_search=_RecordingKbSearch(),
+        llm=llm,
+        embedding=EmptyEmbedding(),
+        trace_writer=_CollectingTraceWriter(),
+        question="q",
+        tool_dispatch=_RecordingDispatch(result={"result": 8}),
+    )
+
+    tool_call = result.events[0].outputs["tool_call"]
+    assert isinstance(tool_call, dict)
+    assert "effective_top_k" not in tool_call

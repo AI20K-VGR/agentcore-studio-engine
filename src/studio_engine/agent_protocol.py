@@ -101,7 +101,13 @@ _NO_KB_EXCERPT = "(không có đoạn trích nào được truy xuất)"
 _TOOL_PARAM_HINTS: dict[str, str] = {
     "kb_search": 'params: {"query": str, "top_k"?: int}',
     "calculator": 'params: {"expression": str}',
-    "current_datetime": 'params: {"mode"?: str, "from_date"?: str, "to_date"?: str}',
+    # LIỆT KÊ giá trị `mode`, không chỉ khai kiểu: `"mode"?: str` nói với model rằng đây là chuỗi
+    # tuỳ ý, nên nó đoán. Đo được trên hệ thật — model gửi `mode="date"` rồi `mode="today"`, cả hai
+    # đều không tồn tại, và người dùng nhận `ValueError: mode không hỗ trợ` ngay trên ô Phản hồi.
+    #
+    # Không sửa bằng cách cho `mode` lạ rơi về `"now"`: một model gõ nhầm `"yesterday"` sẽ nhận giờ
+    # hiện tại như thể đó là đáp án đúng. Chỗ hỏng là hợp đồng nói thiếu, nên vá ở hợp đồng.
+    "current_datetime": 'params: {"mode"?: "now" | "days_between", "from_date"?: str, "to_date"?: str}',
 }
 
 
@@ -214,10 +220,45 @@ _TOOL_CALL_CONVENTION = (
     "- Muốn gọi tool: in CHỈ MỘT DÒNG DUY NHẤT theo đúng dạng\n"
     '  TOOL_CALL: {"tool": "...", "params": {...}}\n'
     "  không thêm chữ nào khác, không bọc code-fence.\n"
+    "- Đã có `[Kết quả <tool>]` cho đúng tham số đó thì KHÔNG gọi lại tool — dùng luôn kết quả.\n"
     "- Khi đã đủ thông tin để trả lời: trả lời thẳng bằng văn xuôi."
 )
 
+# Dòng "KHÔNG gọi lại" đo được từ một lượt chạy thật, câu hỏi `15 * 15`: model gọi `calculator` với
+# CÙNG một biểu thức ba lần, nhận cùng kết quả `225` ba lần, rồi mới trả lời — 7 sự kiện cho một
+# phép nhân.
+#
+# Kết quả CÓ được nối lại vào prompt (`observations` → `build_agent_prompt`), nên model không mù. Nó
+# lặp vì quy ước cũ chỉ nói *"khi đã đủ thông tin thì trả lời thẳng"*, không nói đừng gọi lại thứ đã
+# có kết quả. Ba lượt thừa là ba lần trả tiền LLM cho cùng một phép tính; với câu hỏi KB thì đo được
+# chuỗi 13 lượt.
+#
+# Đây là lời DẶN, không phải chốt chặn: vòng lặp vẫn dispatch nếu model cứ gọi lại. Chốt chặn tất
+# định (bỏ qua dispatch khi gặp lại đúng cặp `(tool, params)`) là việc riêng — ghi ở đây để lần sau
+# không ai tưởng dòng này đã đủ bảo đảm.
+
 # CHỈ nối vào prompt khi `kb_search` thật sự có trong `tool_names` (xem `build_agent_prompt`).
+#
+# ## Vì sao mệnh đề từ chối phải mang điều kiện "SAU KHI đã gọi kb_search"
+#
+# Bản trước viết mệnh đề đó vô điều kiện: *"Nếu các đoạn trích không chứa câu trả lời: nói rõ là
+# không có thông tin"*. Ở lượt 1 **chưa có đoạn trích nào**, nên mệnh đề đúng theo nghĩa đen — và
+# model tuân đúng nghĩa đen: trả lời "Không có thông tin." mà chưa từng tra cứu.
+#
+# Đo được trên hệ thật: một lượt chấm 20 case ghi **62 event `llm-step` và đúng 1 event
+# `kb-retrieve`**, `success_rate=0.00`. Nhìn từ giao diện thì giống hệt "KB chưa có tài liệu", nên
+# nó dẫn người dùng đi kiểm tra nhầm chỗ.
+#
+# Prompt của engine là mặt phẳng DUY NHẤT còn lại để khai hành vi này: `system_prompt` luôn rỗng từ
+# `web#51`. Nên dòng "PHẢI gọi `kb_search` trước" phải nằm ở đây, không thể đẩy cho người dùng gõ.
+#
+# ## Vì sao trích dẫn phải khai là BẮT BUỘC, không phải gợi ý
+#
+# Không chỉ vì `citation_accuracy`. Cờ `refused` suy từ
+# `used_kb_search and (not citations) and (not used_non_kb_tool)` (A5, `agent_loop.py:75`), nên một
+# agent tra KB xong trả lời ĐÚNG mà quên trích dẫn bị đọc thành **đã từ chối** — case ra
+# `fail_refused` trong khi câu trả lời hoàn toàn đúng. Đo được 3/15 case như vậy trong một lượt chấm
+# thật. Câu cũ (*"Khi trả lời dựa trên đoạn trích: trích dẫn chunk_id"*) đọc như mô tả một thói quen.
 #
 # Trước bản vá này, đoạn "nếu đoạn trích không chứa câu trả lời, nói không có thông tin" nằm CỐ
 # ĐỊNH trong `_CONVENTION_BLOCK` (tên cũ), dán vào MỌI agent bất kể `tool_whitelist` — kể cả agent
@@ -233,9 +274,12 @@ _TOOL_CALL_CONVENTION = (
 # reversed) — trước bản vá đó, `kb_search` luôn khả dụng bất kể whitelist nên không có tín hiệu
 # nào để điều kiện hoá theo.
 _GROUNDING_CONVENTION = (
-    "\n- Khi trả lời dựa trên đoạn trích: trích dẫn chunk_id trong ngoặc vuông, ví dụ [doc-1#c1].\n"
-    "- Nếu các đoạn trích không chứa câu trả lời: nói rõ là không có thông tin\n"
-    "  và KHÔNG trích dẫn gì."
+    f"\n- Câu hỏi về nội dung tài liệu/chính sách công ty: PHẢI gọi `{KB_SEARCH_TOOL}` trước, "
+    "không trả lời ngay từ kiến thức nền.\n"
+    "- Mỗi câu trả lời dựa trên đoạn trích BẮT BUỘC kèm chunk_id trong ngoặc vuông, "
+    "ví dụ [doc-1#c1].\n"
+    f"- Chỉ SAU KHI đã gọi `{KB_SEARCH_TOOL}` mà đoạn trích vẫn không chứa câu trả lời: "
+    "nói rõ là không có thông tin và KHÔNG trích dẫn gì."
 )
 
 

@@ -547,8 +547,24 @@ async def run_agent_loop(
         # `eval_adapter._llm_answer` picks the FIRST `final_state` entry with
         # an `"answer"` key, so a tool-call turn must never have one).
         assert isinstance(signal, ToolCall)
+        call_out: dict[str, object] = {"tool": signal.tool, "params": signal.params}
+        if signal.tool == KB_SEARCH_TOOL:
+            # `params` giữ NGUYÊN thứ model xin; `effective_top_k` nói thứ THẬT SỰ chạy.
+            #
+            # Catalog khai `top_k` là tuỳ chọn, nên model có quyền không khai và `_normalise_top_k`
+            # rơi về `_DEFAULT_TOP_K` — nhưng trace chỉ ghi `signal.params`, nên giá trị thật vô
+            # hình. Đo trên một hệ thật: 141/411 lượt gọi `kb_search` không khai `top_k`, và trace
+            # của chúng chỉ in `{"query": ...}`; 109 lượt khác khai `1` rồi lặp tới 13 lần vì một
+            # chunk không đủ trả lời. Hai ca đó nhìn từ trace không phân biệt được.
+            #
+            # Tính ở ĐÂY chứ không để tầng hiển thị suy lại: luật rơi-về-mặc-định (`0 -> 5`,
+            # `"abc" -> 5`, `9999 -> 10`) sống ở `_normalise_top_k`, và một bản sao ở client sẽ lệch
+            # đúng vào ngày luật đổi — âm thầm, vì cả hai bên đều in ra một con số trông hợp lý.
+            #
+            # CHỈ cho `kb_search`: gắn vào mọi tool là bịa một tham số tool đó không nhận.
+            call_out["effective_top_k"] = _normalise_top_k(signal.params.get("top_k", _DEFAULT_TOP_K))
         tool_call_out: dict[str, object] = {
-            "tool_call": {"tool": signal.tool, "params": signal.params},
+            "tool_call": call_out,
             "raw": raw,
             "signal": "tool-call",
         }

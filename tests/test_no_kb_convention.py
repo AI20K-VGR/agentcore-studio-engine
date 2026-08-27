@@ -46,18 +46,27 @@ def test_agent_co_kb_khong_nhan_chi_thi_do() -> None:
 
 
 def test_agent_co_kb_van_giu_chi_thi_grounding() -> None:
-    """Không được đánh đổi: nhánh có KB phải giữ nguyên luật trích dẫn của `engine#51`."""
+    """Không được đánh đổi: nhánh có KB phải giữ luật trích dẫn VÀ luật từ chối-khi-tra-không-ra.
+
+    Neo vào **bất biến**, không vào mặt chữ: bản trước assert nguyên văn *"Nếu các đoạn trích không
+    chứa câu trả lời"*, nên khi mệnh đề đó được viết lại kèm điều kiện *"chỉ SAU KHI đã gọi
+    kb_search"* (`test_search_before_refusing`) thì bài đỏ dù luật không hề mất. Một bài neo mặt chữ
+    biến mọi lần sửa cách diễn đạt thành một lần đỏ giả, và người sửa sẽ học cách nới nó thay vì đọc
+    nó."""
     text = _prompt([KB_SEARCH_TOOL])
-    assert "trích dẫn chunk_id" in text
-    assert "Nếu các đoạn trích không chứa câu trả lời" in text
+    assert "chunk_id" in text
+    assert "không có thông tin" in text
+    assert "đoạn trích" in text
 
 
 def test_agent_khong_kb_khong_nhan_lai_chi_thi_cu() -> None:
     """Bug `engine#51` vá KHÔNG được quay lại: chỉ thị cũ điều kiện theo *đoạn trích rỗng*, mà agent
     không-KB thì đoạn trích luôn rỗng ⇒ nó từ chối cả "xin chào"."""
     text = _prompt([])
-    assert "Nếu các đoạn trích không chứa câu trả lời" not in text
-    assert "trích dẫn chunk_id" not in text
+    # Cùng lý do bài trên: kiểm KHÁI NIỆM ("đoạn trích") chứ không kiểm nguyên văn một câu đã đổi.
+    # Assert vắng mặt của một chuỗi không còn tồn tại ở đâu cả là bài luôn xanh, không chứng minh gì.
+    assert "đoạn trích" not in text
+    assert "chunk_id" not in text
 
 
 def test_khong_dieu_kien_theo_doan_trich_rong() -> None:
