@@ -85,3 +85,45 @@ def test_citation_is_stated_as_mandatory_not_optional() -> None:
     assert any(re.search(r"BẮT BUỘC|PHẢI", line) for line in citation_lines), (
         f"trích dẫn đang được khai như gợi ý, không phải bắt buộc:\n{citation_lines}"
     )
+
+
+def test_the_convention_forbids_repeating_a_tool_call_already_answered() -> None:
+    """Quy ước phải nói thẳng: đã có `[Kết quả <tool>]` cho đúng tham số đó thì KHÔNG gọi lại.
+
+    Đo được trên một lượt chạy thật, câu hỏi `15 * 15`:
+
+        1  LLM   → calculator {"expression":"15 * 15"}
+        2  TOOL  ← result: 225
+        3  LLM   → calculator {"expression":"15 * 15"}   ← y hệt
+        4  TOOL  ← result: 225
+        5  LLM   → calculator {"expression":"15 * 15"}   ← y hệt
+        6  TOOL  ← result: 225
+        7  LLM   → "225"
+
+    Kết quả CÓ được nối lại vào prompt (`observations` → `build_agent_prompt`), nên model không hề
+    mù. Nó lặp vì quy ước chỉ nói *"khi đã đủ thông tin thì trả lời thẳng"* mà không nói **đừng gọi
+    lại thứ đã có kết quả** — ba lượt thừa là ba lần trả tiền LLM cho cùng một phép tính, và với câu
+    hỏi KB thì nó thành chuỗi 13 lượt.
+
+    Bài kiểm nội dung prompt chứ không kiểm hành vi model: đây là lựa chọn "rẻ nhất" — dặn model,
+    không chặn ở vòng lặp. Model là thứ không hứa hẹn gì, nên bài này chỉ khẳng định **lời dặn có
+    mặt**, không khẳng định nó được nghe."""
+    text = _prompt([KB_SEARCH_TOOL, "calculator"])
+    repeat_lines = [line for line in text.splitlines() if "Kết quả" in line and "gọi lại" in line.lower()]
+    assert repeat_lines, f"quy ước không có lời dặn chống gọi lặp:\n{text}"
+
+
+def test_the_catalog_names_the_modes_current_datetime_accepts() -> None:
+    """Catalog phải LIỆT KÊ giá trị `mode` hợp lệ, không chỉ khai kiểu `str`.
+
+    `params: {"mode"?: str}` nói với model rằng đây là một chuỗi tuỳ ý, nên nó đoán — đo được trên
+    hệ thật: model gửi `mode="date"` rồi `mode="today"`, cả hai đều không tồn tại, và người dùng
+    nhận `ValueError: current_datetime: mode không hỗ trợ` ngay trên ô Phản hồi.
+
+    Không sửa bằng cách cho `mode` lạ rơi về `"now"`: một model gõ nhầm `"yesterday"` sẽ nhận giờ
+    hiện tại như thể đó là đáp án đúng (`test_current_datetime_still_rejects_a_mode_it_does_not_know`
+    ghim điều đó). Chỗ hỏng là hợp đồng nói thiếu, nên vá đúng ở hợp đồng."""
+    text = _prompt(["current_datetime"])
+    catalog_line = next(line for line in text.splitlines() if "current_datetime" in line)
+    assert "now" in catalog_line
+    assert "days_between" in catalog_line

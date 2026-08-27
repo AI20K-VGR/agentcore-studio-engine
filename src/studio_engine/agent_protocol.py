@@ -101,7 +101,13 @@ _NO_KB_EXCERPT = "(không có đoạn trích nào được truy xuất)"
 _TOOL_PARAM_HINTS: dict[str, str] = {
     "kb_search": 'params: {"query": str, "top_k"?: int}',
     "calculator": 'params: {"expression": str}',
-    "current_datetime": 'params: {"mode"?: str, "from_date"?: str, "to_date"?: str}',
+    # LIỆT KÊ giá trị `mode`, không chỉ khai kiểu: `"mode"?: str` nói với model rằng đây là chuỗi
+    # tuỳ ý, nên nó đoán. Đo được trên hệ thật — model gửi `mode="date"` rồi `mode="today"`, cả hai
+    # đều không tồn tại, và người dùng nhận `ValueError: mode không hỗ trợ` ngay trên ô Phản hồi.
+    #
+    # Không sửa bằng cách cho `mode` lạ rơi về `"now"`: một model gõ nhầm `"yesterday"` sẽ nhận giờ
+    # hiện tại như thể đó là đáp án đúng. Chỗ hỏng là hợp đồng nói thiếu, nên vá ở hợp đồng.
+    "current_datetime": 'params: {"mode"?: "now" | "days_between", "from_date"?: str, "to_date"?: str}',
 }
 
 
@@ -214,8 +220,22 @@ _TOOL_CALL_CONVENTION = (
     "- Muốn gọi tool: in CHỈ MỘT DÒNG DUY NHẤT theo đúng dạng\n"
     '  TOOL_CALL: {"tool": "...", "params": {...}}\n'
     "  không thêm chữ nào khác, không bọc code-fence.\n"
+    "- Đã có `[Kết quả <tool>]` cho đúng tham số đó thì KHÔNG gọi lại tool — dùng luôn kết quả.\n"
     "- Khi đã đủ thông tin để trả lời: trả lời thẳng bằng văn xuôi."
 )
+
+# Dòng "KHÔNG gọi lại" đo được từ một lượt chạy thật, câu hỏi `15 * 15`: model gọi `calculator` với
+# CÙNG một biểu thức ba lần, nhận cùng kết quả `225` ba lần, rồi mới trả lời — 7 sự kiện cho một
+# phép nhân.
+#
+# Kết quả CÓ được nối lại vào prompt (`observations` → `build_agent_prompt`), nên model không mù. Nó
+# lặp vì quy ước cũ chỉ nói *"khi đã đủ thông tin thì trả lời thẳng"*, không nói đừng gọi lại thứ đã
+# có kết quả. Ba lượt thừa là ba lần trả tiền LLM cho cùng một phép tính; với câu hỏi KB thì đo được
+# chuỗi 13 lượt.
+#
+# Đây là lời DẶN, không phải chốt chặn: vòng lặp vẫn dispatch nếu model cứ gọi lại. Chốt chặn tất
+# định (bỏ qua dispatch khi gặp lại đúng cặp `(tool, params)`) là việc riêng — ghi ở đây để lần sau
+# không ai tưởng dòng này đã đủ bảo đảm.
 
 # CHỈ nối vào prompt khi `kb_search` thật sự có trong `tool_names` (xem `build_agent_prompt`).
 #
