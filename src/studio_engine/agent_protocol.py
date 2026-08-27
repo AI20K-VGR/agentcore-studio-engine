@@ -219,6 +219,27 @@ _TOOL_CALL_CONVENTION = (
 
 # CHỈ nối vào prompt khi `kb_search` thật sự có trong `tool_names` (xem `build_agent_prompt`).
 #
+# ## Vì sao mệnh đề từ chối phải mang điều kiện "SAU KHI đã gọi kb_search"
+#
+# Bản trước viết mệnh đề đó vô điều kiện: *"Nếu các đoạn trích không chứa câu trả lời: nói rõ là
+# không có thông tin"*. Ở lượt 1 **chưa có đoạn trích nào**, nên mệnh đề đúng theo nghĩa đen — và
+# model tuân đúng nghĩa đen: trả lời "Không có thông tin." mà chưa từng tra cứu.
+#
+# Đo được trên hệ thật: một lượt chấm 20 case ghi **62 event `llm-step` và đúng 1 event
+# `kb-retrieve`**, `success_rate=0.00`. Nhìn từ giao diện thì giống hệt "KB chưa có tài liệu", nên
+# nó dẫn người dùng đi kiểm tra nhầm chỗ.
+#
+# Prompt của engine là mặt phẳng DUY NHẤT còn lại để khai hành vi này: `system_prompt` luôn rỗng từ
+# `web#51`. Nên dòng "PHẢI gọi `kb_search` trước" phải nằm ở đây, không thể đẩy cho người dùng gõ.
+#
+# ## Vì sao trích dẫn phải khai là BẮT BUỘC, không phải gợi ý
+#
+# Không chỉ vì `citation_accuracy`. Cờ `refused` suy từ
+# `used_kb_search and (not citations) and (not used_non_kb_tool)` (A5, `agent_loop.py:75`), nên một
+# agent tra KB xong trả lời ĐÚNG mà quên trích dẫn bị đọc thành **đã từ chối** — case ra
+# `fail_refused` trong khi câu trả lời hoàn toàn đúng. Đo được 3/15 case như vậy trong một lượt chấm
+# thật. Câu cũ (*"Khi trả lời dựa trên đoạn trích: trích dẫn chunk_id"*) đọc như mô tả một thói quen.
+#
 # Trước bản vá này, đoạn "nếu đoạn trích không chứa câu trả lời, nói không có thông tin" nằm CỐ
 # ĐỊNH trong `_CONVENTION_BLOCK` (tên cũ), dán vào MỌI agent bất kể `tool_whitelist` — kể cả agent
 # không có `kb_search`/tool nào (chế độ "Chatbot LLM Trực Tiếp", `agentcore-studio-web#14`, 1 node
@@ -233,9 +254,12 @@ _TOOL_CALL_CONVENTION = (
 # reversed) — trước bản vá đó, `kb_search` luôn khả dụng bất kể whitelist nên không có tín hiệu
 # nào để điều kiện hoá theo.
 _GROUNDING_CONVENTION = (
-    "\n- Khi trả lời dựa trên đoạn trích: trích dẫn chunk_id trong ngoặc vuông, ví dụ [doc-1#c1].\n"
-    "- Nếu các đoạn trích không chứa câu trả lời: nói rõ là không có thông tin\n"
-    "  và KHÔNG trích dẫn gì."
+    f"\n- Câu hỏi về nội dung tài liệu/chính sách công ty: PHẢI gọi `{KB_SEARCH_TOOL}` trước, "
+    "không trả lời ngay từ kiến thức nền.\n"
+    "- Mỗi câu trả lời dựa trên đoạn trích BẮT BUỘC kèm chunk_id trong ngoặc vuông, "
+    "ví dụ [doc-1#c1].\n"
+    f"- Chỉ SAU KHI đã gọi `{KB_SEARCH_TOOL}` mà đoạn trích vẫn không chứa câu trả lời: "
+    "nói rõ là không có thông tin và KHÔNG trích dẫn gì."
 )
 
 
